@@ -17,15 +17,38 @@ add_executable(MediaCutter
     src/FFmpegRunner.cpp
 )
 
-target_include_directories(MediaCutter PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mpv/include
-)
+# --- 自动下载并配置 libmpv ---
+# 设定下载版本和路径
+set(MPV_DEV_URL "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240512/mpv-dev-x86_64-20240512-git-f99a9b6.7z")
+set(MPV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mpv")
+set(MPV_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mpv.7z")
 
-target_link_libraries(MediaCutter PRIVATE 
-    Qt6::Widgets 
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mpv/lib/mpv.lib"
-)
+# 如果没找到头文件，则尝试下载并解压 (需要本地有 7z 或 tar)
+if(NOT EXISTS "${MPV_DIR}/include/mpv/client.h")
+    message(STATUS "libmpv not found. Downloading from shinchiro release...")
+    file(MAKE_DIRECTORY "${MPV_DIR}")
+    
+    # 下载
+    file(DOWNLOAD "${MPV_DEV_URL}" "${MPV_ARCHIVE}" SHOW_PROGRESS)
+    
+    # 解压
+    message(STATUS "Extracting libmpv...")
+    execute_process(
+        COMMAND tar -xf "${MPV_ARCHIVE}" -C "${MPV_DIR}"
+        RESULT_VARIABLE extract_result
+    )
+    
+    if(NOT extract_result EQUAL 0)
+        message(FATAL_ERROR "Failed to extract mpv archive. Please ensure Windows tar is available.")
+    endif()
+    
+    # 清理压缩包
+    file(REMOVE "${MPV_ARCHIVE}")
+endif()
+
+# 包含 mpv 路径
+target_include_directories(MediaCutter PRIVATE "${MPV_DIR}/include")
+target_link_libraries(MediaCutter PRIVATE Qt6::Widgets "${MPV_DIR}/lib/mpv.lib")
 
 # --- 优化：自动处理 Windows 下的 Qt 插件部署 ---
 if(WIN32)
