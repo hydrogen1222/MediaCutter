@@ -1,0 +1,49 @@
+# Visual Studio
+.vs/
+out/
+build/
+x64/
+*.user
+*.suo
+*.sln
+*.vcxproj
+*.filters
+
+# vcpkg
+vcpkg_installed/
+
+# Qt generated files
+*_autogen/
+ui_*.h
+moc_*.cpp
+*.qrc.cpp
+
+# Binaries & Libraries
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# Project specific
+third_party/mpv/lib/
+third_party/mpv/include/
+!third_party/mpv/include/mpv/client.h # Keep the headers if you want, but usually better to let user download
+
+# Media and Temp
+*.mp4
+*.mkv
+*.ts
+concat.txt
+temp_*.mp4
+temp_*.ts
+
+# Hidden folders
+.superpowers/
+.gemini/
+.idea/
+.vscode/
+
+# Logs
+*.log

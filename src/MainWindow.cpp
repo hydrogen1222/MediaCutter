@@ -1,0 +1,333 @@
+#include "MainWindow.h"
+#include "MpvWidget.h"
+#include "ClipModel.h"
+#include "FFmpegRunner.h"
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QWidget>
+#include <QFileDialog>
+#include <QMenuBar>
+#include <QAction>
+#include <QPushButton>
+#include <QSlider>
+#include <QLabel>
+#include <QTableView>
+#include <QHeaderView>
+#include <QProgressDialog>
+#include <QMessageBox>
+#include <QTranslator>
+#include <QApplication>
+
+MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
+    setupUI();
+    retranslateUI();
+}
+
+void MainWindow::setupUI() {
+    // Central Widget
+    QWidget *central = new QWidget(this);
+    setCentralWidget(central);
+    QHBoxLayout *rootLayout = new QHBoxLayout(central);
+
+    // Left Side: Player Area
+    QVBoxLayout *playerAreaLayout = new QVBoxLayout();
+    m_player = new MpvWidget(this);
+    playerAreaLayout->addWidget(m_player, 1);
+
+    // Scrubber
+    QHBoxLayout *scrubberLayout = new QHBoxLayout();
+    m_currentTimeLabel = new QLabel("00:00:00.000", this);
+    scrubberLayout->addWidget(m_currentTimeLabel);
+
+    m_scrubber = new QSlider(Qt::Horizontal, this);
+    m_scrubber->setRange(0, 1000);
+    connect(m_scrubber, &QSlider::sliderPressed, [this](){ m_isUserSeeking = true; });
+    connect(m_scrubber, &QSlider::sliderReleased, [this](){ m_isUserSeeking = false; });
+    connect(m_scrubber, &QSlider::sliderMoved, this, &MainWindow::onSliderMoved);
+    scrubberLayout->addWidget(m_scrubber);
+
+    m_durationLabel = new QLabel("00:00:00.000", this);
+    scrubberLayout->addWidget(m_durationLabel);
+    playerAreaLayout->addLayout(scrubberLayout);
+
+    // Player Controls
+    QHBoxLayout *controlsLayout = new QHBoxLayout();
+    m_playPauseBtn = new QPushButton(this);
+    connect(m_playPauseBtn, &QPushButton::clicked, this, &MainWindow::togglePlayback);
+    controlsLayout->addWidget(m_playPauseBtn);
+
+    // Volume
+    controlsLayout->addSpacing(20);
+    m_volumeLabel = new QLabel(this);
+    controlsLayout->addWidget(m_volumeLabel);
+    m_volumeSlider = new QSlider(Qt::Horizontal, this);
+    m_volumeSlider->setRange(0, 100);
+    m_volumeSlider->setValue(100);
+    m_volumeSlider->setFixedWidth(100);
+    connect(m_volumeSlider, &QSlider::valueChanged, this, &MainWindow::onVolumeSliderChanged);
+    controlsLayout->addWidget(m_volumeSlider);
+
+    controlsLayout->addStretch();
+
+    m_markInBtn = new QPushButton(this);
+    connect(m_markInBtn, &QPushButton::clicked, this, &MainWindow::markIn);
+    controlsLayout->addWidget(m_markInBtn);
+
+    m_markInLabel = new QLabel("--:--:--.---", this);
+    controlsLayout->addWidget(m_markInLabel);
+
+    m_markOutBtn = new QPushButton(this);
+    connect(m_markOutBtn, &QPushButton::clicked, this, &MainWindow::markOut);
+    controlsLayout->addWidget(m_markOutBtn);
+
+    m_markOutLabel = new QLabel("--:--:--.---", this);
+    controlsLayout->addWidget(m_markOutLabel);
+
+    playerAreaLayout->addLayout(controlsLayout);
+    rootLayout->addLayout(playerAreaLayout, 3);
+
+    // Right Side: Queue Area
+    QVBoxLayout *queueAreaLayout = new QVBoxLayout();
+    m_queueLabel = new QLabel(this);
+    queueAreaLayout->addWidget(m_queueLabel);
+
+    m_clipModel = new ClipModel(this);
+    m_queueView = new QTableView(this);
+    m_queueView->setModel(m_clipModel);
+    m_queueView->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_queueView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    queueAreaLayout->addWidget(m_queueView);
+
+    // Reorder Buttons
+    QHBoxLayout *reorderLayout = new QHBoxLayout();
+    m_upBtn = new QPushButton(this);
+    connect(m_upBtn, &QPushButton::clicked, this, &MainWindow::moveUp);
+    reorderLayout->addWidget(m_upBtn);
+
+    m_downBtn = new QPushButton(this);
+    connect(m_downBtn, &QPushButton::clicked, this, &MainWindow::moveDown);
+    reorderLayout->addWidget(m_downBtn);
+    queueAreaLayout->addLayout(reorderLayout);
+
+    QHBoxLayout *queueButtonsLayout = new QHBoxLayout();
+    m_deleteBtn = new QPushButton(this);
+    connect(m_deleteBtn, &QPushButton::clicked, this, &MainWindow::deleteSelected);
+    queueButtonsLayout->addWidget(m_deleteBtn);
+    queueAreaLayout->addLayout(queueButtonsLayout);
+    
+    // Export Actions
+    queueAreaLayout->addSpacing(10);
+    m_exportIndBtn = new QPushButton(this);
+    connect(m_exportIndBtn, &QPushButton::clicked, this, &MainWindow::exportIndividually);
+    queueAreaLayout->addWidget(m_exportIndBtn);
+
+    m_exportMergeBtn = new QPushButton(this);
+    connect(m_exportMergeBtn, &QPushButton::clicked, this, &MainWindow::exportMerged);
+    queueAreaLayout->addWidget(m_exportMergeBtn);
+
+    rootLayout->addLayout(queueAreaLayout, 1);
+
+    // Player Signals
+    connect(m_player, &MpvWidget::timeChanged, this, &MainWindow::onTimeChanged);
+    connect(m_player, &MpvWidget::durationChanged, this, &MainWindow::onDurationChanged);
+    connect(m_player, &MpvWidget::volumeChanged, this, &MainWindow::onVolumeChanged);
+}
+
+void MainWindow::retranslateUI() {
+    setWindowTitle(tr("Media Cutter"));
+    
+    // Menu
+    menuBar()->clear();
+    QMenu *fileMenu = menuBar()->addMenu(tr("&File"));
+    QAction *openAction = fileMenu->addAction(tr("&Open File"));
+    connect(openAction, &QAction::triggered, this, &MainWindow::openFile);
+
+    QMenu *langMenu = menuBar()->addMenu(tr("&Language"));
+    QAction *zhAction = langMenu->addAction("简体中文");
+    connect(zhAction, &QAction::triggered, [this]() {
+        static QTranslator translator;
+        if (translator.load("media-cutter_zh_CN.qm")) {
+            qApp->installTranslator(&translator);
+            this->retranslateUI();
+        }
+    });
+    QAction *enAction = langMenu->addAction("English");
+    connect(enAction, &QAction::triggered, [this]() {
+        qApp->removeTranslator(nullptr); 
+        this->retranslateUI();
+    });
+
+    // Pointers
+    m_playPauseBtn->setText(tr("Play/Pause"));
+    m_volumeLabel->setText(tr("Volume:"));
+    m_markInBtn->setText(tr("Mark In"));
+    m_markOutBtn->setText(tr("Mark Out"));
+    m_upBtn->setText(tr("Move Up"));
+    m_downBtn->setText(tr("Move Down"));
+    m_deleteBtn->setText(tr("Delete Selected"));
+    m_exportIndBtn->setText(tr("Export Separately"));
+    m_exportMergeBtn->setText(tr("Export Merged"));
+    m_queueLabel->setText(tr("Export Queue:"));
+}
+
+void MainWindow::openFile() {
+    QString fileName = QFileDialog::getOpenFileName(this, tr("Open Video"), "", tr("Video Files (*.mp4 *.mkv *.avi *.mov);;All Files (*)"));
+    if (!fileName.isEmpty()) {
+        m_currentFilePath = fileName;
+        m_player->loadFile(fileName);
+        m_markIn = 0;
+        m_markOut = -1;
+        m_markInLabel->setText("--:--:--.---");
+        m_markOutLabel->setText("--:--:--.---");
+    }
+}
+
+void MainWindow::togglePlayback() {
+    m_player->playPause();
+}
+
+void MainWindow::onTimeChanged(double time) {
+    if (!m_isUserSeeking) {
+        double duration = m_player->getDuration();
+        if (duration > 0) {
+            m_scrubber->setValue((int)((time / duration) * 1000));
+        }
+    }
+    formatTime(time, m_currentTimeLabel);
+}
+
+void MainWindow::onDurationChanged(double duration) {
+    formatTime(duration, m_durationLabel);
+}
+
+void MainWindow::onVolumeChanged(int volume) {
+    if (!m_volumeSlider->isSliderDown()) {
+        m_volumeSlider->setValue(volume);
+    }
+}
+
+void MainWindow::onSliderMoved(int position) {
+    double duration = m_player->getDuration();
+    if (duration > 0) {
+        double seekTo = (position / 1000.0) * duration;
+        m_player->seek(seekTo);
+    }
+}
+
+void MainWindow::onVolumeSliderChanged(int value) {
+    m_player->setVolume(value);
+}
+
+void MainWindow::formatTime(double seconds, QLabel *label) {
+    int h = static_cast<int>(seconds / 3600);
+    int m = static_cast<int>((seconds - h * 3600) / 60);
+    int s = static_cast<int>(seconds - h * 3600 - m * 60);
+    int ms = static_cast<int>((seconds - static_cast<int>(seconds)) * 1000);
+    label->setText(QString("%1:%2:%3.%4")
+        .arg(h, 2, 10, QChar('0'))
+        .arg(m, 2, 10, QChar('0'))
+        .arg(s, 2, 10, QChar('0'))
+        .arg(ms, 3, 10, QChar('0')));
+}
+
+void MainWindow::markIn() {
+    m_markIn = m_player->getCurrentTime();
+    formatTime(m_markIn, m_markInLabel);
+}
+
+void MainWindow::markOut() {
+    m_markOut = m_player->getCurrentTime();
+    formatTime(m_markOut, m_markOutLabel);
+    
+    if (m_markOut > m_markIn) {
+        m_clipModel->addSegment(m_markIn, m_markOut);
+    }
+}
+
+void MainWindow::deleteSelected() {
+    auto selection = m_queueView->selectionModel()->selectedRows();
+    std::vector<int> rows;
+    for (const auto &index : selection) {
+        rows.push_back(index.row());
+    }
+    std::sort(rows.rbegin(), rows.rend());
+    for (int row : rows) {
+        m_clipModel->removeSegment(row);
+    }
+}
+
+void MainWindow::moveUp() {
+    auto selection = m_queueView->selectionModel()->selectedRows();
+    if (selection.empty()) return;
+    int row = selection.first().row();
+    m_clipModel->moveUp(row);
+    m_queueView->selectRow(row - 1);
+}
+
+void MainWindow::moveDown() {
+    auto selection = m_queueView->selectionModel()->selectedRows();
+    if (selection.empty()) return;
+    int row = selection.first().row();
+    m_clipModel->moveDown(row);
+    m_queueView->selectRow(row + 1);
+}
+
+void MainWindow::exportMerged() {
+    if (m_currentFilePath.isEmpty()) return;
+    auto segments = m_clipModel->segments();
+    if (segments.empty()) {
+        QMessageBox::warning(this, tr("Empty Queue"), tr("No segments to export."));
+        return;
+    }
+
+    QString filter = tr("Video Files (*.mp4 *.mkv *.avi *.mov)");
+    QString output = QFileDialog::getSaveFileName(this, tr("Save Merged Video"), "merged_output.mp4", filter);
+    if (output.isEmpty()) return;
+
+    QProgressDialog *progress = new QProgressDialog(tr("Exporting merged media..."), tr("Cancel"), 0, 0, this);
+    progress->setWindowModality(Qt::WindowModal);
+    progress->show();
+
+    FFmpegRunner *runner = new FFmpegRunner(this);
+    connect(runner, &FFmpegRunner::finished, this, [=](bool success, QString msg) {
+        progress->close();
+        if (success) {
+            QMessageBox::information(this, tr("Export Success"), tr("Media exported successfully!"));
+        } else {
+            QMessageBox::critical(this, tr("Export Failed"), msg);
+        }
+        runner->deleteLater();
+    });
+
+    runner->cutAndMerge(m_currentFilePath, segments, output, true);
+}
+
+void MainWindow::exportIndividually() {
+    if (m_currentFilePath.isEmpty()) return;
+    auto segments = m_clipModel->segments();
+    if (segments.empty()) {
+        QMessageBox::warning(this, tr("Empty Queue"), tr("No segments to export."));
+        return;
+    }
+
+    QString filter = tr("Video Files (*.mp4 *.mkv *.avi *.mov)");
+    QString output = QFileDialog::getSaveFileName(this, tr("Save Individual Segments (Suffixes will be added)"), "segment.mp4", filter);
+    if (output.isEmpty()) return;
+
+    QProgressDialog *progress = new QProgressDialog(tr("Exporting individual segments..."), tr("Cancel"), 0, 0, this);
+    progress->setWindowModality(Qt::WindowModal);
+    progress->show();
+
+    FFmpegRunner *runner = new FFmpegRunner(this);
+    connect(runner, &FFmpegRunner::finished, this, [=](bool success, QString msg) {
+        progress->close();
+        if (success) {
+            QMessageBox::information(this, tr("Export Success"), tr("All segments exported successfully!"));
+        } else {
+            QMessageBox::critical(this, tr("Export Failed"), msg);
+        }
+        runner->deleteLater();
+    });
+
+    runner->cutAndMerge(m_currentFilePath, segments, output, false);
+}
