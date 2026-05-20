@@ -47,3 +47,6 @@ temp_*.ts
 
 # Logs
 *.log
+
+
+docs/

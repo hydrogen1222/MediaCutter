@@ -4,6 +4,8 @@
 
 A high-performance, native desktop application for lossless video and audio clipping. Unlike web-based solutions, this app uses a native media engine for seamless playback of all formats (HEVC/AV1/4K) and leverages FFmpeg for lightning-fast, no-reencoding exports.
 
+`To be honest, it is a product of vibe coding`
+
 ## Key Features
 
 - **Native Performance**: Powered by `libmpv` with full hardware acceleration.
