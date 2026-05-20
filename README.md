@@ -1,4 +1,4 @@
-# Media Cutter (C++/Qt)
+# Media Cutter
 
 [简体中文](./README.zh-CN.md) | English
 
@@ -50,30 +50,3 @@ To build this project, you need:
 ## License
 
 MIT License - See [LICENSE](LICENSE) for details.
-
----
-
-# 媒体剪辑器 (C++/Qt)
-
-基于 C++ 和 Qt 开发的高性能原生无损音视频剪辑工具。通过直接嵌入原生媒体引擎，解决了 Web 架构在播放 HEVC/AV1 等编码时的卡顿和兼容性问题。
-
-## 核心特性
-
-- **原生性能**：基于 `libmpv`，支持全格式硬件加速播放。
-- **无损导出**：利用 FFmpeg 的流拷贝技术，实现极速、零质量损失的剪辑。
-- **灵活工作流**：支持片段排序、分段导出或合并导出。
-- **现代 UI**：基于 Qt Widgets 的深色主题界面。
-- **多语言支持**：内置国际化支持。
-
-## 环境要求
-
-1. **Visual Studio 2022** (勾选“使用 C++ 的桌面开发”)。
-2. **vcpkg** (用于管理 Qt6 依赖)。
-3. **FFmpeg** (需添加到系统环境变量 `PATH`)。
-4. **libmpv 开发包** (放置于 `third_party/mpv/` 目录)。
-
-## 编译步骤
-
-1. 使用 VS 2022 打开项目文件夹。
-2. 在 CMake 设置中指定 `vcpkg.cmake` 工具链。
-3. 点击“全部生成”。
