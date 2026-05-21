@@ -1,9 +1,13 @@
 #include <QApplication>
 #include <QFile>
+#include <clocale>
 #include "MainWindow.h"
 
 int main(int argc, char *argv[]) {
     QApplication a(argc, argv);
+
+    // libmpv requires LC_NUMERIC=C; QApplication may have changed it.
+    std::setlocale(LC_NUMERIC, "C");
 
     // Load stylesheet
     QFile styleFile(":/style.qss");

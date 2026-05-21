@@ -17,6 +17,7 @@
 #include <QMessageBox>
 #include <QTranslator>
 #include <QApplication>
+#include <QCoreApplication>
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setupUI();
@@ -144,18 +145,9 @@ void MainWindow::retranslateUI() {
 
     QMenu *langMenu = menuBar()->addMenu(tr("&Language"));
     QAction *zhAction = langMenu->addAction("简体中文");
-    connect(zhAction, &QAction::triggered, [this]() {
-        static QTranslator translator;
-        if (translator.load("media-cutter_zh_CN.qm")) {
-            qApp->installTranslator(&translator);
-            this->retranslateUI();
-        }
-    });
+    connect(zhAction, &QAction::triggered, this, [this]() { switchLanguage("zh_CN"); });
     QAction *enAction = langMenu->addAction("English");
-    connect(enAction, &QAction::triggered, [this]() {
-        qApp->removeTranslator(nullptr); 
-        this->retranslateUI();
-    });
+    connect(enAction, &QAction::triggered, this, [this]() { switchLanguage(QString()); });
 
     // Pointers
     m_playPauseBtn->setText(tr("Play/Pause"));
@@ -284,11 +276,20 @@ void MainWindow::exportMerged() {
     QString output = QFileDialog::getSaveFileName(this, tr("Save Merged Video"), "merged_output.mp4", filter);
     if (output.isEmpty()) return;
 
-    QProgressDialog *progress = new QProgressDialog(tr("Exporting merged media..."), tr("Cancel"), 0, 0, this);
+    QProgressDialog *progress = new QProgressDialog(tr("Exporting merged media..."), tr("Cancel"), 0, static_cast<int>(segments.size()) + 1, this);
     progress->setWindowModality(Qt::WindowModal);
+    progress->setAutoClose(false);
+    progress->setAutoReset(false);
+    progress->setMinimumDuration(0);
+    progress->setValue(0);
     progress->show();
 
     FFmpegRunner *runner = new FFmpegRunner(this);
+    connect(runner, &FFmpegRunner::progress, progress, [progress](int current, int total, const QString &status) {
+        progress->setMaximum(total);
+        progress->setValue(current);
+        progress->setLabelText(status);
+    });
     connect(runner, &FFmpegRunner::finished, this, [=](bool success, QString msg) {
         progress->close();
         if (success) {
@@ -314,11 +315,20 @@ void MainWindow::exportIndividually() {
     QString output = QFileDialog::getSaveFileName(this, tr("Save Individual Segments (Suffixes will be added)"), "segment.mp4", filter);
     if (output.isEmpty()) return;
 
-    QProgressDialog *progress = new QProgressDialog(tr("Exporting individual segments..."), tr("Cancel"), 0, 0, this);
+    QProgressDialog *progress = new QProgressDialog(tr("Exporting individual segments..."), tr("Cancel"), 0, static_cast<int>(segments.size()) + 1, this);
     progress->setWindowModality(Qt::WindowModal);
+    progress->setAutoClose(false);
+    progress->setAutoReset(false);
+    progress->setMinimumDuration(0);
+    progress->setValue(0);
     progress->show();
 
     FFmpegRunner *runner = new FFmpegRunner(this);
+    connect(runner, &FFmpegRunner::progress, progress, [progress](int current, int total, const QString &status) {
+        progress->setMaximum(total);
+        progress->setValue(current);
+        progress->setLabelText(status);
+    });
     connect(runner, &FFmpegRunner::finished, this, [=](bool success, QString msg) {
         progress->close();
         if (success) {
@@ -330,4 +340,23 @@ void MainWindow::exportIndividually() {
     });
 
     runner->cutAndMerge(m_currentFilePath, segments, output, false);
+}
+
+void MainWindow::switchLanguage(const QString &locale) {
+    if (m_translatorInstalled) {
+        qApp->removeTranslator(&m_translator);
+        m_translatorInstalled = false;
+    }
+
+    if (!locale.isEmpty()) {
+        // 先找资源里的 :/translations/，再尝试可执行目录旁边
+        const QString name = QString("media-cutter_%1").arg(locale);
+        if (m_translator.load(name, ":/translations") ||
+            m_translator.load(name, QCoreApplication::applicationDirPath())) {
+            qApp->installTranslator(&m_translator);
+            m_translatorInstalled = true;
+        }
+    }
+
+    retranslateUI();
 }

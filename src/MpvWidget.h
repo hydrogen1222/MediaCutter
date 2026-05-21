@@ -1,14 +1,16 @@
 // MpvWidget.h
 #pragma once
-#include <QWidget>
+#include <QOpenGLWidget>
+#include <QString>
 #include <mpv/client.h>
-#include <QTimer>
+#include <mpv/render_gl.h>
 
-class MpvWidget : public QWidget {
+class MpvWidget : public QOpenGLWidget {
     Q_OBJECT
 public:
-    MpvWidget(QWidget *parent = nullptr);
-    ~MpvWidget();
+    explicit MpvWidget(QWidget *parent = nullptr);
+    ~MpvWidget() override;
+
     void loadFile(const QString &path);
     void playPause();
     void seek(double seconds);
@@ -22,11 +24,22 @@ signals:
     void durationChanged(double duration);
     void volumeChanged(int volume);
 
+protected:
+    void initializeGL() override;
+    void paintGL() override;
+
 private slots:
-    void pollEvents();
+    void onMpvEvents();
+    void maybeUpdate();
 
 private:
-    mpv_handle *m_mpv;
-    QTimer *m_timer;
+    static void onMpvWakeup(void *ctx);
+    static void onMpvRenderUpdate(void *ctx);
+    static void *getProcAddress(void *ctx, const char *name);
+
+    void handleMpvEvent(mpv_event *event);
+
+    mpv_handle *m_mpv = nullptr;
+    mpv_render_context *m_renderCtx = nullptr;
     QString m_fileName;
 };

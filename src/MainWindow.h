@@ -1,6 +1,7 @@
 #pragma once
 #include <QMainWindow>
 #include <QString>
+#include <QTranslator>
 
 class MpvWidget;
 class QSlider;
@@ -36,6 +37,7 @@ private slots:
 private:
     void setupUI();
     void retranslateUI();
+    void switchLanguage(const QString &locale);
 
     MpvWidget *m_player;
     QSlider *m_scrubber;
@@ -68,4 +70,6 @@ private:
     QLabel *m_markOutLabel;
     
     QString m_currentFilePath;
+    QTranslator m_translator;
+    bool m_translatorInstalled = false;
 };
