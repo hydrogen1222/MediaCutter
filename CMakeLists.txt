@@ -64,7 +64,14 @@ endif()
 
 # --- Windows 专属：vcpkg Qt 插件部署 + libmpv DLL 拷贝 ---
 if(WIN32)
-    set(VCPKG_BASE_DIR "C:/vcpkg/installed/x64-windows")
+    # 尝试自动检测 vcpkg 安装路径
+    if(DEFINED ENV{VCPKG_ROOT})
+        set(VCPKG_BASE_DIR "$ENV{VCPKG_ROOT}/installed/x64-windows")
+    else()
+        # 默认路径，如果未定义环境变量
+        set(VCPKG_BASE_DIR "C:/vcpkg/installed/x64-windows")
+    endif()
+
     set(VCPKG_PLUGINS_RELEASE "${VCPKG_BASE_DIR}/Qt6/plugins")
     set(VCPKG_PLUGINS_DEBUG "${VCPKG_BASE_DIR}/debug/Qt6/plugins")
 

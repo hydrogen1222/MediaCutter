@@ -123,5 +123,27 @@ void FFmpegRunner::onProcessFinished(int exitCode, QProcess::ExitStatus exitStat
 }
 
 void FFmpegRunner::onProcessError(QProcess::ProcessError error) {
-    emit finished(false, QString("FFmpeg process error code: %1").arg(error));
+    QString errorMsg;
+    switch (error) {
+        case QProcess::FailedToStart:
+            errorMsg = "FFmpeg executable not found or failed to start. Check if FFmpeg is installed and in PATH.";
+            break;
+        case QProcess::Crashed:
+            errorMsg = "FFmpeg process crashed.";
+            break;
+        case QProcess::Timedout:
+            errorMsg = "FFmpeg process timed out.";
+            break;
+        case QProcess::ReadError:
+            errorMsg = "Error reading from FFmpeg process.";
+            break;
+        case QProcess::WriteError:
+            errorMsg = "Error writing to FFmpeg process.";
+            break;
+        case QProcess::UnknownError:
+        default:
+            errorMsg = "Unknown FFmpeg process error.";
+            break;
+    }
+    emit finished(false, errorMsg);
 }

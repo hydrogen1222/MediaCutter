@@ -2,6 +2,7 @@
 #include <QMainWindow>
 #include <QString>
 #include <QTranslator>
+#include <QLineEdit>
 
 class MpvWidget;
 class QSlider;
@@ -15,6 +16,8 @@ class MainWindow : public QMainWindow {
 public:
     MainWindow(QWidget *parent = nullptr);
 
+private:
+    void formatTime(double seconds, QLabel *label);
 private slots:
     void openFile();
     void onTimeChanged(double time);
@@ -22,7 +25,6 @@ private slots:
     void onVolumeChanged(int volume);
     void onSliderMoved(int position);
     void onVolumeSliderChanged(int value);
-    void formatTime(double seconds, QLabel *label);
     void togglePlayback();
     
     // Task 4 & 5 slots
@@ -38,12 +40,14 @@ private:
     void setupUI();
     void retranslateUI();
     void switchLanguage(const QString &locale);
+    void toggleTheme();
 
     MpvWidget *m_player;
     QSlider *m_scrubber;
     QLabel *m_currentTimeLabel;
     QLabel *m_durationLabel;
     QPushButton *m_playPauseBtn;
+    QLineEdit *m_timecodeInput;
     
     // Volume
     QSlider *m_volumeSlider;
@@ -72,4 +76,5 @@ private:
     QString m_currentFilePath;
     QTranslator m_translator;
     bool m_translatorInstalled = false;
+    bool m_isDarkTheme = true;
 };

@@ -39,12 +39,15 @@ MpvWidget::MpvWidget(QWidget *parent) : QOpenGLWidget(parent) {
 }
 
 MpvWidget::~MpvWidget() {
-    makeCurrent();
-    if (m_renderCtx) {
-        mpv_render_context_free(m_renderCtx);
-        m_renderCtx = nullptr;
+    // Check if OpenGL context was initialized
+    if (isValid()) {
+        makeCurrent();
+        if (m_renderCtx) {
+            mpv_render_context_free(m_renderCtx);
+            m_renderCtx = nullptr;
+        }
+        doneCurrent();
     }
-    doneCurrent();
     if (m_mpv) {
         mpv_terminate_destroy(m_mpv);
         m_mpv = nullptr;
@@ -63,7 +66,8 @@ void MpvWidget::initializeGL() {
     };
 
     if (mpv_render_context_create(&m_renderCtx, m_mpv, params) < 0) {
-        throw std::runtime_error("failed to initialize mpv render context");
+        qCritical() << "Failed to initialize mpv render context";
+        return;
     }
     mpv_render_context_set_update_callback(m_renderCtx, MpvWidget::onMpvRenderUpdate, this);
 }

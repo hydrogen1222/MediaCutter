@@ -2,6 +2,8 @@
 #include "MpvWidget.h"
 #include "ClipModel.h"
 #include "FFmpegRunner.h"
+#include <QShortcut>
+#include <QLineEdit>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QWidget>
@@ -25,6 +27,44 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 }
 
 void MainWindow::setupUI() {
+    // 设置键盘快捷键
+    QShortcut *spaceShortcut = new QShortcut(Qt::Key_Space, this);
+    connect(spaceShortcut, &QShortcut::activated, this, &MainWindow::togglePlayback);
+
+    QShortcut *leftShortcut = new QShortcut(Qt::Key_Left, this);
+    connect(leftShortcut, &QShortcut::activated, [this]() {
+        m_player->seek(m_player->getCurrentTime() - 1);
+    });
+
+    QShortcut *rightShortcut = new QShortcut(Qt::Key_Right, this);
+    connect(rightShortcut, &QShortcut::activated, [this]() {
+        m_player->seek(m_player->getCurrentTime() + 1);
+    });
+
+    QShortcut *shiftLeftShortcut = new QShortcut(Qt::SHIFT | Qt::Key_Left, this);
+    connect(shiftLeftShortcut, &QShortcut::activated, [this]() {
+        m_player->seek(m_player->getCurrentTime() - 5);
+    });
+
+    QShortcut *shiftRightShortcut = new QShortcut(Qt::SHIFT | Qt::Key_Right, this);
+    connect(shiftRightShortcut, &QShortcut::activated, [this]() {
+        m_player->seek(m_player->getCurrentTime() + 5);
+    });
+
+    QShortcut *iShortcut = new QShortcut(Qt::Key_I, this);
+    connect(iShortcut, &QShortcut::activated, this, &MainWindow::markIn);
+
+    QShortcut *oShortcut = new QShortcut(Qt::Key_O, this);
+    connect(oShortcut, &QShortcut::activated, this, &MainWindow::markOut);
+
+    QShortcut *deleteShortcut = new QShortcut(Qt::Key_Delete, this);
+    connect(deleteShortcut, &QShortcut::activated, this, &MainWindow::deleteSelected);
+
+    QShortcut *ctrlEShortcut = new QShortcut(Qt::CTRL | Qt::Key_E, this);
+    connect(ctrlEShortcut, &QShortcut::activated, this, &MainWindow::exportMerged);
+
+    QShortcut *ctrlShiftEShortcut = new QShortcut(Qt::CTRL | Qt::SHIFT | Qt::Key_E, this);
+    connect(ctrlShiftEShortcut, &QShortcut::activated, this, &MainWindow::exportIndividually);
     // Central Widget
     QWidget *central = new QWidget(this);
     setCentralWidget(central);
@@ -39,6 +79,32 @@ void MainWindow::setupUI() {
     QHBoxLayout *scrubberLayout = new QHBoxLayout();
     m_currentTimeLabel = new QLabel("00:00:00.000", this);
     scrubberLayout->addWidget(m_currentTimeLabel);
+
+    m_timecodeInput = new QLineEdit(this);
+    m_timecodeInput->setPlaceholderText("HH:MM:SS.xxx");
+    m_timecodeInput->setFixedWidth(120);
+    connect(m_timecodeInput, &QLineEdit::returnPressed, [this]() {
+        QString timecode = m_timecodeInput->text().trimmed();
+        // 解析时间码格式：HH:MM:SS.xxx
+        QStringList parts = timecode.split(':');
+        if (parts.size() == 3) {
+            bool ok1, ok2, ok3;
+            int hours = parts[0].toInt(&ok1);
+            int minutes = parts[1].toInt(&ok2);
+            QStringList secParts = parts[2].split('.');
+            int seconds = secParts[0].toInt(&ok3);
+            int milliseconds = 0;
+            if (secParts.size() > 1) {
+                milliseconds = secParts[1].left(3).toInt();
+            }
+            if (ok1 && ok2 && ok3) {
+                double totalSeconds = hours * 3600 + minutes * 60 + seconds + milliseconds / 1000.0;
+                m_player->seek(totalSeconds);
+                m_timecodeInput->clear();
+            }
+        }
+    });
+    scrubberLayout->addWidget(m_timecodeInput);
 
     m_scrubber = new QSlider(Qt::Horizontal, this);
     m_scrubber->setRange(0, 1000);
@@ -148,6 +214,10 @@ void MainWindow::retranslateUI() {
     connect(zhAction, &QAction::triggered, this, [this]() { switchLanguage("zh_CN"); });
     QAction *enAction = langMenu->addAction("English");
     connect(enAction, &QAction::triggered, this, [this]() { switchLanguage(QString()); });
+
+    QMenu *viewMenu = menuBar()->addMenu(tr("&View"));
+    QAction *toggleThemeAction = viewMenu->addAction(tr("Toggle Theme"));
+    connect(toggleThemeAction, &QAction::triggered, this, &MainWindow::toggleTheme);
 
     // Pointers
     m_playPauseBtn->setText(tr("Play/Pause"));
@@ -356,6 +426,24 @@ void MainWindow::switchLanguage(const QString &locale) {
             qApp->installTranslator(&m_translator);
             m_translatorInstalled = true;
         }
+    }
+
+    retranslateUI();
+}
+
+void MainWindow::toggleTheme() {
+    m_isDarkTheme = !m_isDarkTheme;
+
+    QFile styleFile;
+    if (m_isDarkTheme) {
+        styleFile.setFileName(":/style.qss");
+    } else {
+        styleFile.setFileName(":/style-light.qss");
+    }
+
+    if (styleFile.open(QFile::ReadOnly)) {
+        QString styleSheet = QLatin1String(styleFile.readAll());
+        qApp->setStyleSheet(styleSheet);
     }
 
     retranslateUI();

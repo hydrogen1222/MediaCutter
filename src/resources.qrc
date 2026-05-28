@@ -2,5 +2,6 @@
 <RCC version="1.0">
     <qresource prefix="/">
         <file alias="style.qss">style.qss</file>
+        <file alias="style-light.qss">style-light.qss</file>
     </qresource>
 </RCC>

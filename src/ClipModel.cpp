@@ -63,17 +63,14 @@ void ClipModel::removeSegment(int row) {
 
 void ClipModel::moveUp(int row) {
     if (row <= 0 || row >= static_cast<int>(m_segments.size())) return;
-    if (beginMoveRows(QModelIndex(), row, row, QModelIndex(), row - 1)) {
-        std::swap(m_segments[row], m_segments[row - 1]);
-        endMoveRows();
-    }
+    beginResetModel();
+    std::swap(m_segments[row], m_segments[row - 1]);
+    endResetModel();
 }
 
 void ClipModel::moveDown(int row) {
     if (row < 0 || row >= static_cast<int>(m_segments.size()) - 1) return;
-    // Note: destinationChild for moving down to position row+1 is row+2
-    if (beginMoveRows(QModelIndex(), row, row, QModelIndex(), row + 2)) {
-        std::swap(m_segments[row], m_segments[row + 1]);
-        endMoveRows();
-    }
+    beginResetModel();
+    std::swap(m_segments[row], m_segments[row + 1]);
+    endResetModel();
 }

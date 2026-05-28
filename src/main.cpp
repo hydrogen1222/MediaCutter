@@ -16,7 +16,7 @@ int main(int argc, char *argv[]) {
         a.setStyleSheet(styleSheet);
     } else {
         // Fallback for development if resources not compiled
-        QFile styleFileLocal("src/style.qss");
+        QFile styleFileLocal(QCoreApplication::applicationDirPath() + "/../src/style.qss");
         if (styleFileLocal.open(QFile::ReadOnly)) {
             QString styleSheet = QLatin1String(styleFileLocal.readAll());
             a.setStyleSheet(styleSheet);
