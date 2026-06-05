@@ -19,6 +19,7 @@ vcpkg_installed/
 ui_*.h
 moc_*.cpp
 *.qrc.cpp
+*.qm
 
 # Binaries & Libraries
 *.exe
