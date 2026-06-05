@@ -3,6 +3,7 @@ name: Build and Test CI
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
 
@@ -36,3 +37,54 @@ jobs:
 
       - name: Build Project
         run: cmake --build build --config Release
+
+      - name: Deploy Qt Dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          windeployqt --no-compiler-runtime --verbose 1 build/Release/MediaCutter.exe
+
+      - name: Package Release (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          7z a -r MediaCutter-Windows-x64.zip ./build/Release/*
+
+      - name: Upload Windows Artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaCutter-Windows-x64
+          path: MediaCutter-Windows-x64.zip
+
+      - name: Package Release (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          tar -czf MediaCutter-Linux-x64.tar.gz -C build MediaCutter
+
+      - name: Upload Linux Artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaCutter-Linux-x64
+          path: MediaCutter-Linux-x64.tar.gz
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            MediaCutter-Windows-x64.zip
+            MediaCutter-Linux-x64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
