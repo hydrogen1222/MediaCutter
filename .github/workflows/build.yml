@@ -23,7 +23,6 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.6.1'
-          modules: 'qttools'
           install-deps: 'true'
 
       - name: Install dependencies (Linux)
