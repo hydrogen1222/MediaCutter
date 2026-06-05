@@ -60,7 +60,8 @@ if(WIN32)
 
         message(STATUS "Extracting libmpv...")
         execute_process(
-            COMMAND tar -xf "${MPV_ARCHIVE}" -C "${MPV_DIR}"
+            COMMAND ${CMAKE_COMMAND} -E tar xf "${MPV_ARCHIVE}"
+            WORKING_DIRECTORY "${MPV_DIR}"
             RESULT_VARIABLE extract_result
         )
         if(NOT extract_result EQUAL 0)
