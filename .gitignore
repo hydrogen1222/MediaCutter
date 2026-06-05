@@ -35,6 +35,7 @@ third_party/mpv/include/
 *.mp4
 *.mkv
 *.ts
+!translations/*.ts
 concat.txt
 temp_*.mp4
 temp_*.ts

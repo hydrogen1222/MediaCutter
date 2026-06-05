@@ -33,12 +33,28 @@ qt_add_resources(MediaCutter "translations"
 # --- libmpv ---
 if(WIN32)
     # Windows: 自动下载预编译的 mpv-dev 包到 third_party/mpv
-    set(MPV_DEV_URL "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20240512/mpv-dev-x86_64-20240512-git-f99a9b6.7z")
     set(MPV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mpv")
     set(MPV_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mpv.7z")
 
     if(NOT EXISTS "${MPV_DIR}/include/mpv/client.h")
-        message(STATUS "libmpv not found. Downloading from shinchiro release...")
+        message(STATUS "libmpv not found. Querying latest release from shinchiro's repository...")
+        set(API_URL "https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest")
+        set(JSON_FILE "${CMAKE_CURRENT_BINARY_DIR}/latest_mpv_release.json")
+        file(DOWNLOAD "${API_URL}" "${JSON_FILE}" STATUS download_status)
+
+        list(GET download_status 0 status_code)
+        if(NOT status_code EQUAL 0)
+            message(FATAL_ERROR "Failed to query latest libmpv release info. Status: ${download_status}")
+        endif()
+
+        file(READ "${JSON_FILE}" RELEASE_JSON)
+        string(REGEX MATCH "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/[0-9]+/mpv-dev-x86_64-[0-9]+-git-[a-zA-Z0-9]+\\.7z" MPV_DEV_URL "${RELEASE_JSON}")
+
+        if(NOT MPV_DEV_URL)
+            message(FATAL_ERROR "Failed to parse download URL for libmpv-dev from release JSON.")
+        endif()
+
+        message(STATUS "Downloading libmpv from: ${MPV_DEV_URL}")
         file(MAKE_DIRECTORY "${MPV_DIR}")
         file(DOWNLOAD "${MPV_DEV_URL}" "${MPV_ARCHIVE}" SHOW_PROGRESS)
 
@@ -53,8 +69,30 @@ if(WIN32)
         file(REMOVE "${MPV_ARCHIVE}")
     endif()
 
+    # 如果是 MSVC，从 .def 文件生成 mpv.lib 导入库
+    if(MSVC)
+        if(NOT EXISTS "${MPV_DIR}/mpv.lib")
+            message(STATUS "Generating MSVC-compatible mpv.lib using ${CMAKE_AR}...")
+            execute_process(
+                COMMAND "${CMAKE_AR}" /def:"${CMAKE_CURRENT_SOURCE_DIR}/src/libmpv.def" /out:"${MPV_DIR}/mpv.lib" /machine:x64
+                WORKING_DIRECTORY "${MPV_DIR}"
+                RESULT_VARIABLE lib_result
+            )
+            if(NOT lib_result EQUAL 0)
+                message(WARNING "Failed to generate mpv.lib using ${CMAKE_AR}. Will try linking to libmpv.dll.a directly.")
+                set(MPV_LINK_TARGET "${MPV_DIR}/libmpv.dll.a")
+            else()
+                set(MPV_LINK_TARGET "${MPV_DIR}/mpv.lib")
+            endif()
+        else()
+            set(MPV_LINK_TARGET "${MPV_DIR}/mpv.lib")
+        endif()
+    else()
+        set(MPV_LINK_TARGET "${MPV_DIR}/libmpv.dll.a")
+    endif()
+
     target_include_directories(MediaCutter PRIVATE "${MPV_DIR}/include")
-    target_link_libraries(MediaCutter PRIVATE Qt6::Widgets Qt6::OpenGLWidgets "${MPV_DIR}/lib/mpv.lib")
+    target_link_libraries(MediaCutter PRIVATE Qt6::Widgets Qt6::OpenGLWidgets "${MPV_LINK_TARGET}")
 else()
     # Linux/macOS: 通过 pkg-config 使用系统安装的 libmpv
     find_package(PkgConfig REQUIRED)
@@ -93,7 +131,7 @@ if(WIN32)
 
     add_custom_command(TARGET MediaCutter POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mpv/lib/libmpv-2.dll"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/mpv/libmpv-2.dll"
         $<TARGET_FILE_DIR:MediaCutter>
     )
 endif()

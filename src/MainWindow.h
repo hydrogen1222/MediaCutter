@@ -48,6 +48,7 @@ private:
     QLabel *m_durationLabel;
     QPushButton *m_playPauseBtn;
     QLineEdit *m_timecodeInput;
+    QPushButton *m_openFileBtn;
     
     // Volume
     QSlider *m_volumeSlider;

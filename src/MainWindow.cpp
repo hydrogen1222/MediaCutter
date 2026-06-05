@@ -119,6 +119,12 @@ void MainWindow::setupUI() {
 
     // Player Controls
     QHBoxLayout *controlsLayout = new QHBoxLayout();
+    m_openFileBtn = new QPushButton(this);
+    connect(m_openFileBtn, &QPushButton::clicked, this, &MainWindow::openFile);
+    controlsLayout->addWidget(m_openFileBtn);
+
+    controlsLayout->addSpacing(10);
+
     m_playPauseBtn = new QPushButton(this);
     connect(m_playPauseBtn, &QPushButton::clicked, this, &MainWindow::togglePlayback);
     controlsLayout->addWidget(m_playPauseBtn);
@@ -220,6 +226,7 @@ void MainWindow::retranslateUI() {
     connect(toggleThemeAction, &QAction::triggered, this, &MainWindow::toggleTheme);
 
     // Pointers
+    m_openFileBtn->setText(tr("Open File"));
     m_playPauseBtn->setText(tr("Play/Pause"));
     m_volumeLabel->setText(tr("Volume:"));
     m_markInBtn->setText(tr("Mark In"));
@@ -230,6 +237,7 @@ void MainWindow::retranslateUI() {
     m_exportIndBtn->setText(tr("Export Separately"));
     m_exportMergeBtn->setText(tr("Export Merged"));
     m_queueLabel->setText(tr("Export Queue:"));
+    m_clipModel->updateHeaders();
 }
 
 void MainWindow::openFile() {

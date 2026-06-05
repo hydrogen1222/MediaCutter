@@ -41,9 +41,9 @@ QVariant ClipModel::headerData(int section, Qt::Orientation orientation, int rol
     if (role != Qt::DisplayRole || orientation != Qt::Horizontal) return QVariant();
 
     switch (section) {
-        case 0: return "Start";
-        case 1: return "End";
-        case 2: return "Duration";
+        case 0: return tr("Start");
+        case 1: return tr("End");
+        case 2: return tr("Duration");
     }
     return QVariant();
 }
@@ -73,4 +73,8 @@ void ClipModel::moveDown(int row) {
     beginResetModel();
     std::swap(m_segments[row], m_segments[row + 1]);
     endResetModel();
+}
+
+void ClipModel::updateHeaders() {
+    emit headerDataChanged(Qt::Horizontal, 0, 2);
 }

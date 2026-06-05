@@ -21,6 +21,7 @@ public:
     void removeSegment(int row);
     void moveUp(int row);
     void moveDown(int row);
+    void updateHeaders();
 
     const std::vector<Segment>& segments() const { return m_segments; }
 

@@ -102,8 +102,13 @@ void FFmpegRunner::finalizeIndividualExport() {
         QString newPath = targetDir + "/" + baseName + QString("_%1.%2").arg(i + 1).arg(ext);
         QFile::remove(newPath);
         if (!QFile::rename(m_tempFiles[i], newPath)) {
-            emit finished(false, QString("Failed to move segment %1 to destination").arg(i + 1));
-            return;
+            // If rename fails (e.g. cross-device boundary), fallback to copy + delete
+            if (QFile::copy(m_tempFiles[i], newPath)) {
+                QFile::remove(m_tempFiles[i]);
+            } else {
+                emit finished(false, QString("Failed to move segment %1 to destination (rename and copy failed)").arg(i + 1));
+                return;
+            }
         }
     }
 

@@ -29,6 +29,17 @@ A high-performance, native desktop application for lossless video and audio clip
 3. Reorder or delete segments in the queue as needed.
 4. **Export Merged** to combine all segments into one file, or **Export Separately** to save each segment individually. Export uses FFmpeg stream copy — no re-encoding, no quality loss.
 
+## Keyboard Shortcuts
+
+- **Space**: Play / Pause
+- **Left / Right Arrow**: Seek backward / forward 1 second
+- **Shift + Left / Right Arrow**: Seek backward / forward 5 seconds
+- **I**: Mark In (Set segment start)
+- **O**: Mark Out (Set segment end and add to queue)
+- **Delete**: Delete selected segment from the queue
+- **Ctrl + E**: Export Merged
+- **Ctrl + Shift + E**: Export Separately
+
 ## Prerequisites
 
 ### Windows
