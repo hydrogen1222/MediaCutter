@@ -68,6 +68,10 @@ if(WIN32)
             message(FATAL_ERROR "Failed to extract mpv archive. Please ensure Windows tar is available.")
         endif()
         file(REMOVE "${MPV_ARCHIVE}")
+
+        # Debug print extracted files
+        file(GLOB_RECURSE EXTRACTED_FILES RELATIVE "${MPV_DIR}" "${MPV_DIR}/*")
+        message(STATUS "Extracted files in ${MPV_DIR}: ${EXTRACTED_FILES}")
     endif()
 
     # 如果是 MSVC，从 .def 文件生成 mpv.lib 导入库
@@ -117,18 +121,20 @@ if(WIN32)
     set(PLUGIN_SRC_DIR "$<$<CONFIG:Debug>:${VCPKG_PLUGINS_DEBUG}>$<$<NOT:$<CONFIG:Debug>>:${VCPKG_PLUGINS_RELEASE}>")
     set(DEBUG_SUFFIX "$<$<CONFIG:Debug>:d>")
 
-    add_custom_command(TARGET MediaCutter POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:MediaCutter>/platforms"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${PLUGIN_SRC_DIR}/platforms/qwindows${DEBUG_SUFFIX}.dll"
-                "$<TARGET_FILE_DIR:MediaCutter>/platforms/qwindows${DEBUG_SUFFIX}.dll"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:MediaCutter>/styles"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${PLUGIN_SRC_DIR}/styles/qmodernwindowsstyle${DEBUG_SUFFIX}.dll"
-                "$<TARGET_FILE_DIR:MediaCutter>/styles/qmodernwindowsstyle${DEBUG_SUFFIX}.dll"
-        COMMENT "Manually deploying Qt plugins from vcpkg..."
-        COMMAND_EXPAND_LISTS
-    )
+    if(EXISTS "${VCPKG_BASE_DIR}")
+        add_custom_command(TARGET MediaCutter POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:MediaCutter>/platforms"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${PLUGIN_SRC_DIR}/platforms/qwindows${DEBUG_SUFFIX}.dll"
+                    "$<TARGET_FILE_DIR:MediaCutter>/platforms/qwindows${DEBUG_SUFFIX}.dll"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:MediaCutter>/styles"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${PLUGIN_SRC_DIR}/styles/qmodernwindowsstyle${DEBUG_SUFFIX}.dll"
+                    "$<TARGET_FILE_DIR:MediaCutter>/styles/qmodernwindowsstyle${DEBUG_SUFFIX}.dll"
+            COMMENT "Manually deploying Qt plugins from vcpkg..."
+            COMMAND_EXPAND_LISTS
+        )
+    endif()
 
     add_custom_command(TARGET MediaCutter POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
