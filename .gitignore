@@ -8,6 +8,8 @@ x64/
 *.sln
 *.vcxproj
 *.filters
+CMakeSettings.json
+CMakeSettings.json.user
 
 # vcpkg
 vcpkg_installed/
@@ -27,9 +29,7 @@ moc_*.cpp
 *.exp
 
 # Project specific
-third_party/mpv/lib/
-third_party/mpv/include/
-!third_party/mpv/include/mpv/client.h # Keep the headers if you want, but usually better to let user download
+third_party/mpv/
 
 # Media and Temp
 *.mp4
@@ -45,6 +45,7 @@ temp_*.ts
 .gemini/
 .idea/
 .vscode/
+.claude/
 
 # Logs
 *.log
