@@ -39,8 +39,8 @@ void FFmpegRunner::runNextStep() {
         // Cutting step
         const Segment &s = m_segments[m_currentIndex];
         
-        QFileInfo info(m_segments[m_currentIndex].filePath);
-        QString ext = info.suffix();
+        QFileInfo outputInfo(m_output);
+        QString ext = outputInfo.suffix();
         if (ext.isEmpty()) ext = "mp4";
         
         QString tempFile = m_tempDir.path() + QString("/temp_%1.%2").arg(m_currentIndex).arg(ext);
@@ -51,14 +51,31 @@ void FFmpegRunner::runNextStep() {
              << "-to" << QString::number(s.end, 'f', 3)
              << "-i" << m_segments[m_currentIndex].filePath
              << "-map" << "0";
-        
-        if (m_hasVideo) {
-            args << "-c:v" << "libx264"
-                 << "-preset" << "superfast"
-                 << "-crf" << "18"
-                 << "-c:a" << "aac";
+
+        QFileInfo inputInfo(m_segments[m_currentIndex].filePath);
+        QString inputExt = inputInfo.suffix().toLower();
+        QString outputExt = ext.toLower();
+
+        bool sameExtension = (inputExt == outputExt);
+
+        if (!m_hasVideo) {
+            // Target is audio-only
+            args << "-vn"; // Discard video stream of the source (prevent decoding, 0% video CPU!)
+            if (sameExtension) {
+                args << "-c:a" << "copy";
+            } else {
+                // Re-encode audio to target format naturally
+            }
         } else {
-            // Re-encode audio to ensure sample-accurate cuts without using video encoders
+            // Target is video
+            if (sameExtension) {
+                args << "-c" << "copy";
+            } else {
+                args << "-c:v" << "libx264"
+                     << "-preset" << "superfast"
+                     << "-crf" << "18"
+                     << "-c:a" << "aac";
+            }
         }
         
         args << "-avoid_negative_ts" << "make_zero"
