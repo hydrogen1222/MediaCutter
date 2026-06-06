@@ -131,6 +131,32 @@ void MainWindow::setupUI() {
     connect(m_playPauseBtn, &QPushButton::clicked, this, &MainWindow::togglePlayback);
     controlsLayout->addWidget(m_playPauseBtn);
 
+    controlsLayout->addSpacing(10);
+
+    m_seekBack5Btn = new QPushButton("-5s", this);
+    connect(m_seekBack5Btn, &QPushButton::clicked, [this]() {
+        m_player->seek(m_player->getCurrentTime() - 5.0);
+    });
+    controlsLayout->addWidget(m_seekBack5Btn);
+
+    m_seekBack1Btn = new QPushButton("-1s", this);
+    connect(m_seekBack1Btn, &QPushButton::clicked, [this]() {
+        m_player->seek(m_player->getCurrentTime() - 1.0);
+    });
+    controlsLayout->addWidget(m_seekBack1Btn);
+
+    m_seekForward1Btn = new QPushButton("+1s", this);
+    connect(m_seekForward1Btn, &QPushButton::clicked, [this]() {
+        m_player->seek(m_player->getCurrentTime() + 1.0);
+    });
+    controlsLayout->addWidget(m_seekForward1Btn);
+
+    m_seekForward5Btn = new QPushButton("+5s", this);
+    connect(m_seekForward5Btn, &QPushButton::clicked, [this]() {
+        m_player->seek(m_player->getCurrentTime() + 5.0);
+    });
+    controlsLayout->addWidget(m_seekForward5Btn);
+
     // Volume
     controlsLayout->addSpacing(20);
     m_volumeLabel = new QLabel(this);
@@ -261,6 +287,10 @@ void MainWindow::retranslateUI() {
     // Pointers
     m_openFileBtn->setText(tr("Open File"));
     m_playPauseBtn->setText(tr("Play/Pause"));
+    m_seekBack5Btn->setToolTip(tr("Backward 5 seconds (Shift+Left)"));
+    m_seekBack1Btn->setToolTip(tr("Backward 1 second (Left)"));
+    m_seekForward1Btn->setToolTip(tr("Forward 1 second (Right)"));
+    m_seekForward5Btn->setToolTip(tr("Forward 5 seconds (Shift+Right)"));
     m_volumeLabel->setText(tr("Volume:"));
     m_markInBtn->setText(tr("Mark In"));
     m_markOutBtn->setText(tr("Mark Out"));

@@ -53,6 +53,10 @@ private:
     QPushButton *m_playPauseBtn;
     QLineEdit *m_timecodeInput;
     QPushButton *m_openFileBtn;
+    QPushButton *m_seekBack5Btn;
+    QPushButton *m_seekBack1Btn;
+    QPushButton *m_seekForward1Btn;
+    QPushButton *m_seekForward5Btn;
     
     // Volume
     QSlider *m_volumeSlider;

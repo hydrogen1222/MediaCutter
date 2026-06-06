@@ -10,6 +10,10 @@
     <message><source>&amp;Language</source><translation>语言(&amp;L)</translation></message>
     <message><source>Play/Pause</source><translation>播放 / 暂停</translation></message>
     <message><source>Volume:</source><translation>音量：</translation></message>
+    <message><source>Backward 5 seconds (Shift+Left)</source><translation>后退 5 秒 (Shift+左方向键)</translation></message>
+    <message><source>Backward 1 second (Left)</source><translation>后退 1 秒 (左方向键)</translation></message>
+    <message><source>Forward 1 second (Right)</source><translation>前进 1 秒 (右方向键)</translation></message>
+    <message><source>Forward 5 seconds (Shift+Right)</source><translation>前进 5 秒 (Shift+右方向键)</translation></message>
     <message><source>Mark In</source><translation>设为起点</translation></message>
     <message><source>Mark Out</source><translation>设为终点</translation></message>
     <message><source>Move Up</source><translation>上移</translation></message>
