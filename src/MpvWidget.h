@@ -1,11 +1,12 @@
 // MpvWidget.h
 #pragma once
 #include <QOpenGLWidget>
+#include <QOpenGLFunctions>
 #include <QString>
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
 
-class MpvWidget : public QOpenGLWidget {
+class MpvWidget : public QOpenGLWidget, protected QOpenGLFunctions {
     Q_OBJECT
 public:
     explicit MpvWidget(QWidget *parent = nullptr);
@@ -18,6 +19,7 @@ public:
     double getDuration();
     double getCurrentTime();
     QString getFileName() const { return m_fileName; }
+    bool hasVideo();
 
 signals:
     void timeChanged(double time);

@@ -10,7 +10,7 @@ class FFmpegRunner : public QObject {
     Q_OBJECT
 public:
     explicit FFmpegRunner(QObject *parent = nullptr);
-    void cutAndMerge(const QString &input, const std::vector<Segment> &segments, const QString &output, bool mergeAfterCut = true);
+    void cutAndMerge(const QString &input, const std::vector<Segment> &segments, const QString &output, bool mergeAfterCut = true, bool hasVideo = true);
 
 signals:
     void progress(int current, int total, const QString &status);
@@ -33,4 +33,5 @@ private:
     QStringList m_tempFiles;
     bool m_isMerging = false;
     bool m_mergeAfterCut = true;
+    bool m_hasVideo = true;
 };

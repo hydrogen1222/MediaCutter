@@ -389,7 +389,7 @@ void MainWindow::exportMerged() {
         runner->deleteLater();
     });
 
-    runner->cutAndMerge(m_currentFilePath, segments, output, true);
+    runner->cutAndMerge(m_currentFilePath, segments, output, true, m_player->hasVideo());
 }
 
 void MainWindow::exportIndividually() {
@@ -428,7 +428,7 @@ void MainWindow::exportIndividually() {
         runner->deleteLater();
     });
 
-    runner->cutAndMerge(m_currentFilePath, segments, output, false);
+    runner->cutAndMerge(m_currentFilePath, segments, output, false, m_player->hasVideo());
 }
 
 void MainWindow::switchLanguage(const QString &locale) {

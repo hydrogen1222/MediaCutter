@@ -9,13 +9,14 @@ FFmpegRunner::FFmpegRunner(QObject *parent) : QObject(parent), m_process(new QPr
     connect(m_process, &QProcess::errorOccurred, this, &FFmpegRunner::onProcessError);
 }
 
-void FFmpegRunner::cutAndMerge(const QString &input, const std::vector<Segment> &segments, const QString &output, bool mergeAfterCut) {
+void FFmpegRunner::cutAndMerge(const QString &input, const std::vector<Segment> &segments, const QString &output, bool mergeAfterCut, bool hasVideo) {
     m_input = input;
     m_segments = segments;
     m_output = output;
     m_currentIndex = 0;
     m_isMerging = false;
     m_mergeAfterCut = mergeAfterCut;
+    m_hasVideo = hasVideo;
     m_tempFiles.clear();
 
     if (m_segments.empty()) {
@@ -47,9 +48,18 @@ void FFmpegRunner::runNextStep() {
         args << "-ss" << QString::number(s.start, 'f', 3)
              << "-to" << QString::number(s.end, 'f', 3)
              << "-i" << m_segments[m_currentIndex].filePath
-             << "-map" << "0"
-             << "-c" << "copy"
-             << "-avoid_negative_ts" << "make_zero"
+             << "-map" << "0";
+        
+        if (m_hasVideo) {
+            args << "-c:v" << "libx264"
+                 << "-preset" << "superfast"
+                 << "-crf" << "18"
+                 << "-c:a" << "aac";
+        } else {
+            // Re-encode audio to ensure sample-accurate cuts without using video encoders
+        }
+        
+        args << "-avoid_negative_ts" << "make_zero"
              << "-y" << tempFile;
 
         emit progress(m_currentIndex, m_segments.size() + 1, QString("Cutting segment %1...").arg(m_currentIndex + 1));

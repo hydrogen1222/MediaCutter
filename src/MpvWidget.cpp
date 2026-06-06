@@ -36,6 +36,11 @@ MpvWidget::MpvWidget(QWidget *parent) : QOpenGLWidget(parent) {
     mpv_observe_property(m_mpv, 0, "volume", MPV_FORMAT_DOUBLE);
 
     mpv_set_wakeup_callback(m_mpv, MpvWidget::onMpvWakeup, this);
+
+    // Keep open after EOF so we can seek and replay
+    mpv_set_property_string(m_mpv, "keep-open", "yes");
+    // Enable frame-accurate seeking by default
+    mpv_set_property_string(m_mpv, "hr-seek", "yes");
 }
 
 MpvWidget::~MpvWidget() {
@@ -55,6 +60,9 @@ MpvWidget::~MpvWidget() {
 }
 
 void MpvWidget::initializeGL() {
+    initializeOpenGLFunctions();
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
     mpv_opengl_init_params glInit{ &MpvWidget::getProcAddress, nullptr };
     int advanced = 1;
 
@@ -73,6 +81,7 @@ void MpvWidget::initializeGL() {
 }
 
 void MpvWidget::paintGL() {
+    glClear(GL_COLOR_BUFFER_BIT);
     if (!m_renderCtx) return;
 
     const qreal dpr = devicePixelRatioF();
@@ -142,6 +151,7 @@ void MpvWidget::loadFile(const QString &path) {
     if (err < 0) {
         qDebug() << "mpv loadfile error:" << mpv_error_string(err);
     }
+    update();
 }
 
 void MpvWidget::playPause() {
@@ -151,7 +161,7 @@ void MpvWidget::playPause() {
 
 void MpvWidget::seek(double seconds) {
     QByteArray secBytes = QString::number(seconds, 'f', 3).toUtf8();
-    const char *cmd[] = { "seek", secBytes.constData(), "absolute", nullptr };
+    const char *cmd[] = { "seek", secBytes.constData(), "absolute+exact", nullptr };
     int err = mpv_command(m_mpv, cmd);
     if (err < 0) {
         qDebug() << "mpv seek error:" << mpv_error_string(err);
@@ -174,3 +184,12 @@ double MpvWidget::getCurrentTime() {
     mpv_get_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &time);
     return time;
 }
+
+bool MpvWidget::hasVideo() {
+    char *vid = nullptr;
+    mpv_get_property(m_mpv, "vid", MPV_FORMAT_STRING, &vid);
+    bool has_vid = vid && strcmp(vid, "no") != 0;
+    if (vid) mpv_free(vid);
+    return has_vid;
+}
+
