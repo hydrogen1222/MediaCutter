@@ -18,11 +18,17 @@ public:
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
 
+    Qt::ItemFlags flags(const QModelIndex &index) const override;
+    bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
+
     void addSegment(const QString &filePath, double start, double end);
     void removeSegment(int row);
     void moveUp(int row);
     void moveDown(int row);
     void updateHeaders();
+    void clearSegments();
+    void updateSegmentStart(int row, double start);
+    void updateSegmentEnd(int row, double end);
 
     const std::vector<Segment>& segments() const { return m_segments; }
 

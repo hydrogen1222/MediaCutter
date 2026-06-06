@@ -3,6 +3,8 @@
 #include <QTextStream>
 #include <QDebug>
 #include <QFileInfo>
+#include <QDir>
+#include <QRegularExpression>
 
 FFmpegRunner::FFmpegRunner(QObject *parent) : QObject(parent), m_process(new QProcess(this)) {
     connect(m_process, &QProcess::finished, this, &FFmpegRunner::onProcessFinished);
@@ -108,15 +110,37 @@ void FFmpegRunner::finalizeIndividualExport() {
     QString baseName = outputInfo.baseName();
     QString ext = outputInfo.suffix();
 
+    int startIndex = 1;
+    QDir dir(targetDir);
+    QStringList filters;
+    filters << QString("%1_*.%2").arg(baseName).arg(ext);
+    QStringList existingFiles = dir.entryList(filters, QDir::Files);
+
+    int maxIndex = 0;
+    QRegularExpression regex(QString("^%1_(\\d+)\\.%2$").arg(QRegularExpression::escape(baseName)).arg(QRegularExpression::escape(ext)), QRegularExpression::CaseInsensitiveOption);
+    for (const QString &filename : existingFiles) {
+        QRegularExpressionMatch match = regex.match(filename);
+        if (match.hasMatch()) {
+            int num = match.captured(1).toInt();
+            if (num > maxIndex) {
+                maxIndex = num;
+            }
+        }
+    }
+
+    if (maxIndex > 0) {
+        startIndex = maxIndex + 1;
+    }
+
     for (int i = 0; i < m_tempFiles.size(); ++i) {
-        QString newPath = targetDir + "/" + baseName + QString("_%1.%2").arg(i + 1).arg(ext);
+        QString newPath = targetDir + "/" + baseName + QString("_%1.%2").arg(startIndex + i).arg(ext);
         QFile::remove(newPath);
         if (!QFile::rename(m_tempFiles[i], newPath)) {
             // If rename fails (e.g. cross-device boundary), fallback to copy + delete
             if (QFile::copy(m_tempFiles[i], newPath)) {
                 QFile::remove(m_tempFiles[i]);
             } else {
-                emit finished(false, QString("Failed to move segment %1 to destination (rename and copy failed)").arg(i + 1));
+                emit finished(false, QString("Failed to move segment %1 to destination (rename and copy failed)").arg(startIndex + i));
                 return;
             }
         }

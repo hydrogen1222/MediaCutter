@@ -66,7 +66,9 @@ private:
     QPushButton *m_deleteBtn;
     QPushButton *m_exportIndBtn;
     QPushButton *m_exportMergeBtn;
+    QPushButton *m_loopBtn;
     QLabel *m_queueLabel;
+    bool m_isLoopingSegment = false;
 
     bool m_isUserSeeking = false;
 

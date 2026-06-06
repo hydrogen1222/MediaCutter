@@ -18,10 +18,13 @@
     <message><source>Export Separately</source><translation>分段导出</translation></message>
     <message><source>Export Merged</source><translation>合并导出</translation></message>
     <message><source>Export Queue:</source><translation>导出队列：</translation></message>
+    <message><source>Loop Segment</source><translation>循环片段</translation></message>
     <message><source>Open File</source><translation>打开文件</translation></message>
     <message><source>Open Media</source><translation>打开媒体文件</translation></message>
     <message><source>Media Files (*.mp4 *.mkv *.avi *.mov *.mp3 *.flac *.wav *.ogg *.aac *.wma *.mka *.m4a *.opus *.webm *.ts *.flv *.wmv);;Video Files (*.mp4 *.mkv *.avi *.mov *.webm *.ts *.flv *.wmv);;Audio Files (*.mp3 *.flac *.wav *.ogg *.aac *.wma *.mka *.m4a *.opus);;All Files (*)</source><translation>媒体文件 (*.mp4 *.mkv *.avi *.mov *.mp3 *.flac *.wav *.ogg *.aac *.wma *.mka *.m4a *.opus *.webm *.ts *.flv *.wmv);;视频文件 (*.mp4 *.mkv *.avi *.mov *.webm *.ts *.flv *.wmv);;音频文件 (*.mp3 *.flac *.wav *.ogg *.aac *.wma *.mka *.m4a *.opus);;所有文件 (*)</translation></message>
     <message><source>Media Files (*.mp4 *.mkv *.avi *.mov *.mp3 *.flac *.wav *.ogg *.aac *.mka);;All Files (*)</source><translation>媒体文件 (*.mp4 *.mkv *.avi *.mov *.mp3 *.flac *.wav *.ogg *.aac *.mka);;所有文件 (*)</translation></message>
+    <message><source>Video Files (*.mp4 *.mkv *.avi *.mov)</source><translation>视频文件 (*.mp4 *.mkv *.avi *.mov)</translation></message>
+    <message><source>Audio Files (*.mp3 *.flac *.wav *.ogg *.aac *.mka)</source><translation>音频文件 (*.mp3 *.flac *.wav *.ogg *.aac *.mka)</translation></message>
     <message><source>Empty Queue</source><translation>队列为空</translation></message>
     <message><source>No segments to export.</source><translation>没有可导出的片段。</translation></message>
     <message><source>Save Merged Media</source><translation>保存合并后的媒体</translation></message>

@@ -188,7 +188,32 @@ void MainWindow::setupUI() {
     m_deleteBtn = new QPushButton(this);
     connect(m_deleteBtn, &QPushButton::clicked, this, &MainWindow::deleteSelected);
     queueButtonsLayout->addWidget(m_deleteBtn);
+
+    m_loopBtn = new QPushButton(this);
+    m_loopBtn->setCheckable(true);
+    connect(m_loopBtn, &QPushButton::toggled, [this](bool checked) {
+        m_isLoopingSegment = checked;
+        if (checked) {
+            auto selection = m_queueView->selectionModel()->selectedRows();
+            if (!selection.empty()) {
+                int row = selection.first().row();
+                const auto &segments = m_clipModel->segments();
+                if (row >= 0 && row < static_cast<int>(segments.size())) {
+                    m_player->seek(segments[row].start);
+                }
+            }
+        }
+    });
+    queueButtonsLayout->addWidget(m_loopBtn);
     queueAreaLayout->addLayout(queueButtonsLayout);
+
+    connect(m_queueView, &QTableView::doubleClicked, [this](const QModelIndex &index) {
+        int row = index.row();
+        const auto &segments = m_clipModel->segments();
+        if (row >= 0 && row < static_cast<int>(segments.size())) {
+            m_player->seek(segments[row].start);
+        }
+    });
     
     // Export Actions
     queueAreaLayout->addSpacing(10);
@@ -209,7 +234,11 @@ void MainWindow::setupUI() {
 }
 
 void MainWindow::retranslateUI() {
-    setWindowTitle(tr("Media Cutter"));
+    if (m_currentFilePath.isEmpty()) {
+        setWindowTitle(tr("Media Cutter"));
+    } else {
+        setWindowTitle(tr("Media Cutter") + " - " + QFileInfo(m_currentFilePath).fileName());
+    }
     
     // Menu
     menuBar()->clear();
@@ -240,6 +269,7 @@ void MainWindow::retranslateUI() {
     m_deleteBtn->setText(tr("Delete Selected"));
     m_exportIndBtn->setText(tr("Export Separately"));
     m_exportMergeBtn->setText(tr("Export Merged"));
+    m_loopBtn->setText(tr("Loop Segment"));
     m_queueLabel->setText(tr("Export Queue:"));
     m_clipModel->updateHeaders();
 }
@@ -251,10 +281,12 @@ void MainWindow::openFile() {
         m_currentFilePath = fileNames.first();
         saveLastDirectory(m_currentFilePath);
         m_player->loadFile(m_currentFilePath);
+        m_clipModel->clearSegments();
         m_markIn = 0;
         m_markOut = -1;
         m_markInLabel->setText("--:--:--.---");
         m_markOutLabel->setText("--:--:--.---");
+        setWindowTitle(tr("Media Cutter") + " - " + QFileInfo(m_currentFilePath).fileName());
     }
 }
 
@@ -270,6 +302,20 @@ void MainWindow::onTimeChanged(double time) {
         }
     }
     formatTime(time, m_currentTimeLabel);
+
+    if (m_isLoopingSegment) {
+        auto selection = m_queueView->selectionModel()->selectedRows();
+        if (!selection.empty()) {
+            int row = selection.first().row();
+            const auto &segments = m_clipModel->segments();
+            if (row >= 0 && row < static_cast<int>(segments.size())) {
+                const auto &seg = segments[row];
+                if (time >= seg.end || time < seg.start) {
+                    m_player->seek(seg.start);
+                }
+            }
+        }
+    }
 }
 
 void MainWindow::onDurationChanged(double duration) {
@@ -307,12 +353,27 @@ void MainWindow::formatTime(double seconds, QLabel *label) {
 }
 
 void MainWindow::markIn() {
-    m_markIn = m_player->getCurrentTime();
+    double curTime = m_player->getCurrentTime();
+    auto selection = m_queueView->selectionModel()->selectedRows();
+    if (!selection.empty()) {
+        int row = selection.first().row();
+        m_clipModel->updateSegmentStart(row, curTime);
+        return;
+    }
+    m_markIn = curTime;
     formatTime(m_markIn, m_markInLabel);
 }
 
 void MainWindow::markOut() {
-    m_markOut = m_player->getCurrentTime();
+    double curTime = m_player->getCurrentTime();
+    auto selection = m_queueView->selectionModel()->selectedRows();
+    if (!selection.empty()) {
+        int row = selection.first().row();
+        m_clipModel->updateSegmentEnd(row, curTime);
+        return;
+    }
+    
+    m_markOut = curTime;
     formatTime(m_markOut, m_markOutLabel);
     
     if (m_markOut > m_markIn && !m_currentFilePath.isEmpty()) {
@@ -353,6 +414,11 @@ void MainWindow::moveDown() {
     m_queueView->selectRow(row + 1);
 }
 
+static bool isAudioExtension(const QString &ext) {
+    static const QStringList audioExts = {"mp3", "flac", "wav", "ogg", "aac", "mka", "m4a", "opus", "wma"};
+    return audioExts.contains(ext.toLower());
+}
+
 void MainWindow::exportMerged() {
     if (m_currentFilePath.isEmpty()) return;
     auto segments = m_clipModel->segments();
@@ -361,8 +427,14 @@ void MainWindow::exportMerged() {
         return;
     }
 
-    QString filter = tr("Media Files (*.mp4 *.mkv *.avi *.mov *.mp3 *.flac *.wav *.ogg *.aac *.mka);;All Files (*)");
-    QString output = QFileDialog::getSaveFileName(this, tr("Save Merged Media"), getLastDirectory() + "/merged_output.mp4", filter);
+    QFileInfo sourceInfo(m_currentFilePath);
+    QString base = sourceInfo.baseName();
+    QString ext = sourceInfo.suffix();
+    if (ext.isEmpty()) ext = "mp4";
+    QString defaultPath = getLastDirectory() + "/" + base + "_merged." + ext;
+
+    QString filter = tr("Video Files (*.mp4 *.mkv *.avi *.mov);;Audio Files (*.mp3 *.flac *.wav *.ogg *.aac *.mka);;All Files (*)");
+    QString output = QFileDialog::getSaveFileName(this, tr("Save Merged Media"), defaultPath, filter);
     if (output.isEmpty()) return;
 
     QProgressDialog *progress = new QProgressDialog(tr("Exporting merged media..."), tr("Cancel"), 0, static_cast<int>(segments.size()) + 1, this);
@@ -389,7 +461,9 @@ void MainWindow::exportMerged() {
         runner->deleteLater();
     });
 
-    runner->cutAndMerge(m_currentFilePath, segments, output, true, m_player->hasVideo());
+    QFileInfo outInfo(output);
+    bool exportHasVideo = m_player->hasVideo() && !isAudioExtension(outInfo.suffix());
+    runner->cutAndMerge(m_currentFilePath, segments, output, true, exportHasVideo);
 }
 
 void MainWindow::exportIndividually() {
@@ -400,8 +474,14 @@ void MainWindow::exportIndividually() {
         return;
     }
 
-    QString filter = tr("Media Files (*.mp4 *.mkv *.avi *.mov *.mp3 *.flac *.wav *.ogg *.aac *.mka);;All Files (*)");
-    QString output = QFileDialog::getSaveFileName(this, tr("Save Individual Segments (Suffixes will be added)"), getLastDirectory() + "/segment.mp4", filter);
+    QFileInfo sourceInfo(m_currentFilePath);
+    QString base = sourceInfo.baseName();
+    QString ext = sourceInfo.suffix();
+    if (ext.isEmpty()) ext = "mp4";
+    QString defaultPath = getLastDirectory() + "/" + base + "_cut." + ext;
+
+    QString filter = tr("Video Files (*.mp4 *.mkv *.avi *.mov);;Audio Files (*.mp3 *.flac *.wav *.ogg *.aac *.mka);;All Files (*)");
+    QString output = QFileDialog::getSaveFileName(this, tr("Save Individual Segments (Suffixes will be added)"), defaultPath, filter);
     if (output.isEmpty()) return;
 
     QProgressDialog *progress = new QProgressDialog(tr("Exporting individual segments..."), tr("Cancel"), 0, static_cast<int>(segments.size()) + 1, this);
@@ -428,7 +508,9 @@ void MainWindow::exportIndividually() {
         runner->deleteLater();
     });
 
-    runner->cutAndMerge(m_currentFilePath, segments, output, false, m_player->hasVideo());
+    QFileInfo outInfo(output);
+    bool exportHasVideo = m_player->hasVideo() && !isAudioExtension(outInfo.suffix());
+    runner->cutAndMerge(m_currentFilePath, segments, output, false, exportHasVideo);
 }
 
 void MainWindow::switchLanguage(const QString &locale) {
