@@ -20,6 +20,8 @@
 #include <QTranslator>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QSettings>
+#include <QFileInfo>
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setupUI();
@@ -214,6 +216,8 @@ void MainWindow::retranslateUI() {
     QMenu *fileMenu = menuBar()->addMenu(tr("&File"));
     QAction *openAction = fileMenu->addAction(tr("&Open File"));
     connect(openAction, &QAction::triggered, this, &MainWindow::openFile);
+    QAction *resetDirAction = fileMenu->addAction(tr("Reset Default Directory"));
+    connect(resetDirAction, &QAction::triggered, this, &MainWindow::resetDefaultDirectory);
 
     QMenu *langMenu = menuBar()->addMenu(tr("&Language"));
     QAction *zhAction = langMenu->addAction("简体中文");
@@ -241,10 +245,12 @@ void MainWindow::retranslateUI() {
 }
 
 void MainWindow::openFile() {
-    QString fileName = QFileDialog::getOpenFileName(this, tr("Open Video"), "", tr("Video Files (*.mp4 *.mkv *.avi *.mov);;All Files (*)"));
-    if (!fileName.isEmpty()) {
-        m_currentFilePath = fileName;
-        m_player->loadFile(fileName);
+    QStringList fileNames = QFileDialog::getOpenFileNames(this, tr("Open Media"), getLastDirectory(),
+        tr("Media Files (*.mp4 *.mkv *.avi *.mov *.mp3 *.flac *.wav *.ogg *.aac *.wma *.mka *.m4a *.opus *.webm *.ts *.flv *.wmv);;Video Files (*.mp4 *.mkv *.avi *.mov *.webm *.ts *.flv *.wmv);;Audio Files (*.mp3 *.flac *.wav *.ogg *.aac *.wma *.mka *.m4a *.opus);;All Files (*)"));
+    if (!fileNames.isEmpty()) {
+        m_currentFilePath = fileNames.first();
+        saveLastDirectory(m_currentFilePath);
+        m_player->loadFile(m_currentFilePath);
         m_markIn = 0;
         m_markOut = -1;
         m_markInLabel->setText("--:--:--.---");
@@ -309,8 +315,13 @@ void MainWindow::markOut() {
     m_markOut = m_player->getCurrentTime();
     formatTime(m_markOut, m_markOutLabel);
     
-    if (m_markOut > m_markIn) {
-        m_clipModel->addSegment(m_markIn, m_markOut);
+    if (m_markOut > m_markIn && !m_currentFilePath.isEmpty()) {
+        m_clipModel->addSegment(m_currentFilePath, m_markIn, m_markOut);
+        // Reset marks for next segment
+        m_markIn = m_markOut;
+        m_markOut = -1;
+        formatTime(m_markIn, m_markInLabel);
+        m_markOutLabel->setText("--:--:--.---");
     }
 }
 
@@ -350,8 +361,8 @@ void MainWindow::exportMerged() {
         return;
     }
 
-    QString filter = tr("Video Files (*.mp4 *.mkv *.avi *.mov)");
-    QString output = QFileDialog::getSaveFileName(this, tr("Save Merged Video"), "merged_output.mp4", filter);
+    QString filter = tr("Media Files (*.mp4 *.mkv *.avi *.mov *.mp3 *.flac *.wav *.ogg *.aac *.mka);;All Files (*)");
+    QString output = QFileDialog::getSaveFileName(this, tr("Save Merged Media"), getLastDirectory() + "/merged_output.mp4", filter);
     if (output.isEmpty()) return;
 
     QProgressDialog *progress = new QProgressDialog(tr("Exporting merged media..."), tr("Cancel"), 0, static_cast<int>(segments.size()) + 1, this);
@@ -389,8 +400,8 @@ void MainWindow::exportIndividually() {
         return;
     }
 
-    QString filter = tr("Video Files (*.mp4 *.mkv *.avi *.mov)");
-    QString output = QFileDialog::getSaveFileName(this, tr("Save Individual Segments (Suffixes will be added)"), "segment.mp4", filter);
+    QString filter = tr("Media Files (*.mp4 *.mkv *.avi *.mov *.mp3 *.flac *.wav *.ogg *.aac *.mka);;All Files (*)");
+    QString output = QFileDialog::getSaveFileName(this, tr("Save Individual Segments (Suffixes will be added)"), getLastDirectory() + "/segment.mp4", filter);
     if (output.isEmpty()) return;
 
     QProgressDialog *progress = new QProgressDialog(tr("Exporting individual segments..."), tr("Cancel"), 0, static_cast<int>(segments.size()) + 1, this);
@@ -455,4 +466,19 @@ void MainWindow::toggleTheme() {
     }
 
     retranslateUI();
+}
+
+QString MainWindow::getLastDirectory() const {
+    QSettings settings("MediaCutter", "MediaCutter");
+    return settings.value("lastOpenDir", QCoreApplication::applicationDirPath()).toString();
+}
+
+void MainWindow::saveLastDirectory(const QString &path) {
+    QSettings settings("MediaCutter", "MediaCutter");
+    settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
+}
+
+void MainWindow::resetDefaultDirectory() {
+    QSettings settings("MediaCutter", "MediaCutter");
+    settings.remove("lastOpenDir");
 }

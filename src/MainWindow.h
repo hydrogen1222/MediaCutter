@@ -42,6 +42,10 @@ private:
     void switchLanguage(const QString &locale);
     void toggleTheme();
 
+    QString getLastDirectory() const;
+    void saveLastDirectory(const QString &path);
+    void resetDefaultDirectory();
+
     MpvWidget *m_player;
     QSlider *m_scrubber;
     QLabel *m_currentTimeLabel;

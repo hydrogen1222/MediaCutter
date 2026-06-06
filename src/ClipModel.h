@@ -3,6 +3,7 @@
 #include <vector>
 
 struct Segment {
+    QString filePath;
     double start;
     double end;
 };
@@ -17,7 +18,7 @@ public:
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
 
-    void addSegment(double start, double end);
+    void addSegment(const QString &filePath, double start, double end);
     void removeSegment(int row);
     void moveUp(int row);
     void moveDown(int row);

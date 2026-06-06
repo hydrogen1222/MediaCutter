@@ -36,7 +36,7 @@ void FFmpegRunner::runNextStep() {
         // Cutting step
         const Segment &s = m_segments[m_currentIndex];
         
-        QFileInfo info(m_input);
+        QFileInfo info(m_segments[m_currentIndex].filePath);
         QString ext = info.suffix();
         if (ext.isEmpty()) ext = "mp4";
         
@@ -46,7 +46,7 @@ void FFmpegRunner::runNextStep() {
         QStringList args;
         args << "-ss" << QString::number(s.start, 'f', 3)
              << "-to" << QString::number(s.end, 'f', 3)
-             << "-i" << m_input
+             << "-i" << m_segments[m_currentIndex].filePath
              << "-map" << "0"
              << "-c" << "copy"
              << "-avoid_negative_ts" << "make_zero"

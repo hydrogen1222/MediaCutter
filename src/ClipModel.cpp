@@ -1,5 +1,6 @@
 #include "ClipModel.h"
 #include <QString>
+#include <QFileInfo>
 
 ClipModel::ClipModel(QObject *parent) : QAbstractTableModel(parent) {}
 
@@ -10,7 +11,7 @@ int ClipModel::rowCount(const QModelIndex &parent) const {
 
 int ClipModel::columnCount(const QModelIndex &parent) const {
     if (parent.isValid()) return 0;
-    return 3; // Start, End, Duration
+    return 4; // File, Start, End, Duration
 }
 
 static QString formatTimestamp(double seconds) {
@@ -30,9 +31,10 @@ QVariant ClipModel::data(const QModelIndex &index, int role) const {
 
     const auto &seg = m_segments[index.row()];
     switch (index.column()) {
-        case 0: return formatTimestamp(seg.start);
-        case 1: return formatTimestamp(seg.end);
-        case 2: return formatTimestamp(seg.end - seg.start);
+        case 0: return QFileInfo(seg.filePath).fileName();
+        case 1: return formatTimestamp(seg.start);
+        case 2: return formatTimestamp(seg.end);
+        case 3: return formatTimestamp(seg.end - seg.start);
     }
     return QVariant();
 }
@@ -41,16 +43,17 @@ QVariant ClipModel::headerData(int section, Qt::Orientation orientation, int rol
     if (role != Qt::DisplayRole || orientation != Qt::Horizontal) return QVariant();
 
     switch (section) {
-        case 0: return tr("Start");
-        case 1: return tr("End");
-        case 2: return tr("Duration");
+        case 0: return tr("File");
+        case 1: return tr("Start");
+        case 2: return tr("End");
+        case 3: return tr("Duration");
     }
     return QVariant();
 }
 
-void ClipModel::addSegment(double start, double end) {
+void ClipModel::addSegment(const QString &filePath, double start, double end) {
     beginInsertRows(QModelIndex(), rowCount(), rowCount());
-    m_segments.push_back({start, end});
+    m_segments.push_back({filePath, start, end});
     endInsertRows();
 }
 
@@ -76,5 +79,5 @@ void ClipModel::moveDown(int row) {
 }
 
 void ClipModel::updateHeaders() {
-    emit headerDataChanged(Qt::Horizontal, 0, 2);
+    emit headerDataChanged(Qt::Horizontal, 0, 3);
 }
