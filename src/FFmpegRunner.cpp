@@ -46,28 +46,55 @@ void FFmpegRunner::runNextStep() {
         QString tempFile = m_tempDir.path() + QString("/temp_%1.%2").arg(m_currentIndex).arg(ext);
         m_tempFiles << tempFile;
 
-        QStringList args;
-        args << "-ss" << QString::number(s.start, 'f', 3)
-             << "-to" << QString::number(s.end, 'f', 3)
-             << "-i" << m_segments[m_currentIndex].filePath
-             << "-map" << "0";
-
         QFileInfo inputInfo(m_segments[m_currentIndex].filePath);
         QString inputExt = inputInfo.suffix().toLower();
         QString outputExt = ext.toLower();
 
         bool sameExtension = (inputExt == outputExt);
 
+        QStringList args;
+
         if (!m_hasVideo) {
-            // Target is audio-only
-            args << "-vn"; // Discard video stream of the source (prevent decoding, 0% video CPU!)
-            if (sameExtension) {
-                args << "-c:a" << "copy";
-            } else {
-                // Re-encode audio to target format naturally
+            // ===== Audio-only export =====
+            // Always re-encode audio (never stream copy). Rationale:
+            // - Audio re-encoding is extremely fast (1000x+ realtime for lossless, 100x+ for lossy)
+            // - Stream copy causes broken timestamps / seek tables in FLAC, OGG, and other formats
+            // - Lossless formats (FLAC, WAV) remain bit-perfect after re-encoding
+            // - Place -ss/-to after -i for precise output-based seeking
+            args << "-i" << m_segments[m_currentIndex].filePath
+                 << "-ss" << QString::number(s.start, 'f', 6)
+                 << "-to" << QString::number(s.end, 'f', 6)
+                 << "-map" << "0:a"
+                 << "-vn";
+
+            // Select the best encoder for the target format
+            if (outputExt == "flac") {
+                args << "-c:a" << "flac";
+            } else if (outputExt == "wav") {
+                args << "-c:a" << "pcm_s16le";
+            } else if (outputExt == "mp3") {
+                args << "-c:a" << "libmp3lame" << "-q:a" << "0";
+            } else if (outputExt == "ogg") {
+                args << "-c:a" << "libvorbis" << "-q:a" << "6";
+            } else if (outputExt == "opus") {
+                args << "-c:a" << "libopus" << "-b:a" << "128k";
+            } else if (outputExt == "aac" || outputExt == "m4a") {
+                args << "-c:a" << "aac" << "-b:a" << "192k";
+            } else if (outputExt == "wma") {
+                args << "-c:a" << "wmav2" << "-b:a" << "192k";
+            } else if (outputExt == "mka") {
+                // MKA is a container; auto-select based on source codec
             }
+            // else: let FFmpeg auto-select encoder for other formats
         } else {
-            // Target is video
+            // ===== Video export =====
+            // For video, input-seeking (-ss before -i) is fast and works well
+            // because FFmpeg seeks to the nearest keyframe.
+            args << "-ss" << QString::number(s.start, 'f', 6)
+                 << "-to" << QString::number(s.end, 'f', 6)
+                 << "-i" << m_segments[m_currentIndex].filePath
+                 << "-map" << "0";
+
             if (sameExtension) {
                 args << "-c" << "copy";
             } else {
