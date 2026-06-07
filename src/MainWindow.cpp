@@ -463,7 +463,7 @@ void MainWindow::exportMerged() {
     if (ext.isEmpty()) ext = "mp4";
     QString defaultPath = getLastDirectory() + "/" + base + "_merged." + ext;
 
-    QString filter = tr("Video Files (*.mp4 *.mkv *.avi *.mov *.webm *.flv *.ts);;Audio Files (*.mp3 *.flac *.wav *.ogg *.aac *.mka *.m4a *.opus *.wma);;All Files (*)");
+    QString filter = tr("Video Files (*.mp4 *.mkv *.avi *.mov *.webm *.flv *.ts);;Audio Files (*.flac *.wav *.ogg *.opus *.aac *.m4a *.mka *.mp3 *.wma);;All Files (*)");
     QString output = QFileDialog::getSaveFileName(this, tr("Save Merged Media"), defaultPath, filter);
     if (output.isEmpty()) return;
 
@@ -510,7 +510,7 @@ void MainWindow::exportIndividually() {
     if (ext.isEmpty()) ext = "mp4";
     QString defaultPath = getLastDirectory() + "/" + base + "_cut." + ext;
 
-    QString filter = tr("Video Files (*.mp4 *.mkv *.avi *.mov *.webm *.flv *.ts);;Audio Files (*.mp3 *.flac *.wav *.ogg *.aac *.mka *.m4a *.opus *.wma);;All Files (*)");
+    QString filter = tr("Video Files (*.mp4 *.mkv *.avi *.mov *.webm *.flv *.ts);;Audio Files (*.flac *.wav *.ogg *.opus *.aac *.m4a *.mka *.mp3 *.wma);;All Files (*)");
     QString output = QFileDialog::getSaveFileName(this, tr("Save Individual Segments (Suffixes will be added)"), defaultPath, filter);
     if (output.isEmpty()) return;
 

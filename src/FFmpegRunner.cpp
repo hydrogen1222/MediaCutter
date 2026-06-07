@@ -69,30 +69,20 @@ void FFmpegRunner::runNextStep() {
 
             // Select the best encoder for the target format
             // Principle: maximize quality, aim for lossless or near-lossless
+            // For lossy formats: do NOT hardcode encoder names (e.g. libmp3lame)
+            // because they may not be compiled into the user's FFmpeg build.
+            // Instead, let FFmpeg auto-select and only set bitrate via -b:a.
             if (outputExt == "flac") {
-                // Lossless: FLAC re-encoding is bit-perfect
+                // Lossless: built-in FFmpeg encoder, always available
                 args << "-c:a" << "flac";
             } else if (outputExt == "wav") {
-                // Lossless: preserve highest bit depth (24-bit)
+                // Lossless: built-in FFmpeg encoder, always available
                 args << "-c:a" << "pcm_s24le";
-            } else if (outputExt == "mp3") {
-                // Lossy max: 320kbps CBR is the absolute ceiling for MP3
-                args << "-c:a" << "libmp3lame" << "-b:a" << "320k";
-            } else if (outputExt == "ogg") {
-                // Lossy max: q10 is the highest quality for Vorbis (~500kbps)
-                args << "-c:a" << "libvorbis" << "-q:a" << "10";
-            } else if (outputExt == "opus") {
-                // Lossy max: 512kbps is near the codec ceiling (510kbps)
-                args << "-c:a" << "libopus" << "-b:a" << "512k";
-            } else if (outputExt == "aac" || outputExt == "m4a") {
-                // Lossy max: highest practical AAC bitrate
-                args << "-c:a" << "aac" << "-b:a" << "320k";
-            } else if (outputExt == "wma") {
-                args << "-c:a" << "wmav2" << "-b:a" << "320k";
-            } else if (outputExt == "mka") {
-                // MKA is a container; auto-select based on source codec
+            } else {
+                // Lossy formats (mp3, ogg, opus, aac, m4a, wma, mka, etc.)
+                // Let FFmpeg auto-detect the encoder; just set max bitrate
+                args << "-b:a" << "320k";
             }
-            // else: let FFmpeg auto-select encoder for other formats
         } else {
             // ===== Video export =====
             // NEVER re-encode video. This software's philosophy is cutting, not re-encoding.
