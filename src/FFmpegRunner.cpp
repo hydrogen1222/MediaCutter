@@ -68,41 +68,41 @@ void FFmpegRunner::runNextStep() {
                  << "-vn";
 
             // Select the best encoder for the target format
+            // Principle: maximize quality, aim for lossless or near-lossless
             if (outputExt == "flac") {
+                // Lossless: FLAC re-encoding is bit-perfect
                 args << "-c:a" << "flac";
             } else if (outputExt == "wav") {
-                args << "-c:a" << "pcm_s16le";
+                // Lossless: preserve highest bit depth (24-bit)
+                args << "-c:a" << "pcm_s24le";
             } else if (outputExt == "mp3") {
-                args << "-c:a" << "libmp3lame" << "-q:a" << "0";
+                // Lossy max: 320kbps CBR is the absolute ceiling for MP3
+                args << "-c:a" << "libmp3lame" << "-b:a" << "320k";
             } else if (outputExt == "ogg") {
-                args << "-c:a" << "libvorbis" << "-q:a" << "6";
+                // Lossy max: q10 is the highest quality for Vorbis (~500kbps)
+                args << "-c:a" << "libvorbis" << "-q:a" << "10";
             } else if (outputExt == "opus") {
-                args << "-c:a" << "libopus" << "-b:a" << "128k";
+                // Lossy max: 512kbps is near the codec ceiling (510kbps)
+                args << "-c:a" << "libopus" << "-b:a" << "512k";
             } else if (outputExt == "aac" || outputExt == "m4a") {
-                args << "-c:a" << "aac" << "-b:a" << "192k";
+                // Lossy max: highest practical AAC bitrate
+                args << "-c:a" << "aac" << "-b:a" << "320k";
             } else if (outputExt == "wma") {
-                args << "-c:a" << "wmav2" << "-b:a" << "192k";
+                args << "-c:a" << "wmav2" << "-b:a" << "320k";
             } else if (outputExt == "mka") {
                 // MKA is a container; auto-select based on source codec
             }
             // else: let FFmpeg auto-select encoder for other formats
         } else {
             // ===== Video export =====
-            // For video, input-seeking (-ss before -i) is fast and works well
-            // because FFmpeg seeks to the nearest keyframe.
+            // NEVER re-encode video. This software's philosophy is cutting, not re-encoding.
+            // Always use stream copy for both video and audio streams.
+            // Input-seeking (-ss before -i) is fast because FFmpeg seeks to the nearest keyframe.
             args << "-ss" << QString::number(s.start, 'f', 6)
                  << "-to" << QString::number(s.end, 'f', 6)
                  << "-i" << m_segments[m_currentIndex].filePath
-                 << "-map" << "0";
-
-            if (sameExtension) {
-                args << "-c" << "copy";
-            } else {
-                args << "-c:v" << "libx264"
-                     << "-preset" << "superfast"
-                     << "-crf" << "18"
-                     << "-c:a" << "aac";
-            }
+                 << "-map" << "0"
+                 << "-c" << "copy";
         }
         
         args << "-avoid_negative_ts" << "make_zero"
