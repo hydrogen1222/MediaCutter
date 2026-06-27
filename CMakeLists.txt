@@ -17,6 +17,7 @@ add_executable(MediaCutter
     src/FFmpegRunner.cpp
     src/AudioPlayerWidget.cpp
     src/RadioVideoDialog.cpp
+    src/SubtitleBurnDialog.cpp
     src/resources.qrc
 )
 

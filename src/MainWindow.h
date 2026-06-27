@@ -11,6 +11,7 @@ class QPushButton;
 class QTableView;
 class ClipModel;
 class RadioVideoDialog;
+class SubtitleBurnDialog;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -37,6 +38,7 @@ private slots:
     void exportMerged();
     void exportIndividually();
     void openRadioVideoDialog();
+    void openSubtitleBurnDialog();
 
 private:
     void setupUI();

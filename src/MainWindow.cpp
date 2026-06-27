@@ -3,6 +3,7 @@
 #include "ClipModel.h"
 #include "FFmpegRunner.h"
 #include "RadioVideoDialog.h"
+#include "SubtitleBurnDialog.h"
 #include <QShortcut>
 #include <QLineEdit>
 #include <QVBoxLayout>
@@ -278,6 +279,8 @@ void MainWindow::retranslateUI() {
     fileMenu->addSeparator();
     QAction *radioAction = fileMenu->addAction(tr("Create Radio Video..."));
     connect(radioAction, &QAction::triggered, this, &MainWindow::openRadioVideoDialog);
+    QAction *burnSubAction = fileMenu->addAction(tr("Burn Subtitles..."));
+    connect(burnSubAction, &QAction::triggered, this, &MainWindow::openSubtitleBurnDialog);
 
     QMenu *langMenu = menuBar()->addMenu(tr("&Language"));
     QAction *zhAction = langMenu->addAction("简体中文");
@@ -327,6 +330,11 @@ void MainWindow::openFile() {
 
 void MainWindow::openRadioVideoDialog() {
     RadioVideoDialog dialog(this);
+    dialog.exec();
+}
+
+void MainWindow::openSubtitleBurnDialog() {
+    SubtitleBurnDialog dialog(this);
     dialog.exec();
 }
 

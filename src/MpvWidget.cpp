@@ -154,6 +154,17 @@ void MpvWidget::loadFile(const QString &path) {
     update();
 }
 
+void MpvWidget::setExternalSubtitle(const QString &path) {
+    // Set before loadFile(): mpv opens external subs listed in sub-files at
+    // file-open time and auto-selects the first one (verified via track-list),
+    // so the styled .ass renders via libass immediately.
+    QByteArray utf8Path = QDir::toNativeSeparators(path).toUtf8();
+    int err = mpv_set_option_string(m_mpv, "sub-files", utf8Path.constData());
+    if (err < 0) {
+        qDebug() << "mpv sub-files error:" << mpv_error_string(err);
+    }
+}
+
 void MpvWidget::playPause() {
     const char *cmd[] = { "cycle", "pause", nullptr };
     mpv_command(m_mpv, cmd);

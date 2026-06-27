@@ -44,6 +44,7 @@
     <message><source>&amp;View</source><translation>视图(&amp;V)</translation></message>
     <message><source>Toggle Theme</source><translation>切换主题</translation></message>
     <message><source>Create Radio Video...</source><translation>制作电台视频...</translation></message>
+    <message><source>Burn Subtitles...</source><translation>压制硬字幕...</translation></message>
 </context>
 <context>
     <name>ClipModel</name>
@@ -57,6 +58,12 @@
     <message><source>Done</source><translation>完成</translation></message>
     <message><source>Radio video created successfully.</source><translation>电台视频制作成功。</translation></message>
     <message><source>Creating radio video...</source><translation>正在制作电台视频……</translation></message>
+    <message><source>Subtitles burned successfully.</source><translation>字幕压制成功。</translation></message>
+    <message><source>Burning subtitles...</source><translation>正在压制字幕……</translation></message>
+    <message><source>Failed to create temporary directory.</source><translation>创建临时目录失败。</translation></message>
+    <message><source>Could not read the subtitle file:
+%1</source><translation>无法读取字幕文件：
+%1</translation></message>
 </context>
 <context>
     <name>RadioVideoDialog</name>
@@ -96,5 +103,33 @@
     <message><source>Radio video created successfully!</source><translation>电台视频已成功制作！</translation></message>
     <message><source>Export failed.</source><translation>导出失败。</translation></message>
     <message><source>Export Failed</source><translation>导出失败</translation></message>
+</context>
+<context>
+    <name>SubtitleBurnDialog</name>
+    <message><source>Burn Subtitles</source><translation>压制硬字幕</translation></message>
+    <message><source>Play</source><translation>播放</translation></message>
+    <message><source>Volume:</source><translation>音量：</translation></message>
+    <message><source>Choose Video...</source><translation>选择视频……</translation></message>
+    <message><source>(no video)</source><translation>（未选择视频）</translation></message>
+    <message><source>Choose Subtitle (.ass)...</source><translation>选择字幕（.ass）……</translation></message>
+    <message><source>(no subtitle)</source><translation>（未选择字幕）</translation></message>
+    <message><source>Output FPS:</source><translation>输出帧率：</translation></message>
+    <message><source>Output framerate. A normal value (e.g. 30) keeps subtitle effects (move, fade, transforms) smooth even when the source video is low-framerate (e.g. a radio video).</source><translation>输出帧率。取一个正常值（如 30）可让字幕特效（移动、淡入淡出、变换）保持流畅，即便源视频帧率较低（如电台视频）。</translation></message>
+    <message><source>Burn</source><translation>压制</translation></message>
+    <message><source>Cancel</source><translation>取消</translation></message>
+    <message><source>Burning subtitles...</source><translation>正在压制字幕……</translation></message>
+    <message><source>Save Burned Video</source><translation>保存压制后的视频</translation></message>
+    <message><source>Video Files (*.mp4 *.mkv *.mov *.webm);;All Files (*)</source><translation>视频文件 (*.mp4 *.mkv *.mov *.webm);;所有文件 (*)</translation></message>
+    <message><source>Cancelled.</source><translation>已取消。</translation></message>
+    <message><source>Cancelling...</source><translation>正在取消……</translation></message>
+    <message><source>Done</source><translation>完成</translation></message>
+    <message><source>Burn Success</source><translation>压制成功</translation></message>
+    <message><source>Subtitles burned successfully!</source><translation>字幕压制成功！</translation></message>
+    <message><source>Burn failed.</source><translation>压制失败。</translation></message>
+    <message><source>Burn Failed</source><translation>压制失败</translation></message>
+    <message><source>Choose Video</source><translation>选择视频</translation></message>
+    <message><source>Video Files (*.mp4 *.mkv *.mov *.webm *.avi *.ts *.flv *.wmv);;All Files (*)</source><translation>视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.ts *.flv *.wmv);;所有文件 (*)</translation></message>
+    <message><source>Choose Subtitle</source><translation>选择字幕</translation></message>
+    <message><source>Subtitles (*.ass *.ssa *.srt *.sub);;All Files (*)</source><translation>字幕 (*.ass *.ssa *.srt *.sub);;所有文件 (*)</translation></message>
 </context>
 </TS>

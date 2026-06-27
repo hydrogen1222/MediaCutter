@@ -13,6 +13,10 @@ public:
     ~MpvWidget() override;
 
     void loadFile(const QString &path);
+    // Queue an external subtitle file (e.g. a .ass) to load alongside the next
+    // loadFile() call, rendered by libass. Must be set BEFORE loadFile() because
+    // mpv binds sub-files at open time. Used by the subtitle-burn preview.
+    void setExternalSubtitle(const QString &path);
     void playPause();
     void seek(double seconds);
     void setVolume(int percent);
