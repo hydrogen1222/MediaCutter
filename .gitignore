@@ -37,9 +37,17 @@ third_party/mpv/
 *.mkv
 *.ts
 !translations/*.ts
+*.flac
+*.wav
+*.mp3
+*.ogg
+*.aac
+*.m4a
+*.opus
+*.wma
+*.mka
 concat.txt
-temp_*.mp4
-temp_*.ts
+temp_*
 
 # Hidden folders
 .superpowers/

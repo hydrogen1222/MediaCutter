@@ -33,6 +33,7 @@
     <message><source>No segments to export.</source><translation>没有可导出的片段。</translation></message>
     <message><source>Save Merged Media</source><translation>保存合并后的媒体</translation></message>
     <message><source>Save Individual Segments (Suffixes will be added)</source><translation>保存独立片段（将自动添加序号后缀）</translation></message>
+    <message><source>Video Files (*.mp4 *.mkv *.avi *.mov *.webm *.flv *.ts);;Audio Files (*.flac *.wav *.ogg *.opus *.aac *.m4a *.mka *.mp3 *.wma);;All Files (*)</source><translation>视频文件 (*.mp4 *.mkv *.avi *.mov *.webm *.flv *.ts);;音频文件 (*.flac *.wav *.ogg *.opus *.aac *.m4a *.mka *.mp3 *.wma);;所有文件 (*)</translation></message>
     <message><source>Exporting merged media...</source><translation>正在合并导出……</translation></message>
     <message><source>Exporting individual segments...</source><translation>正在分段导出……</translation></message>
     <message><source>Cancel</source><translation>取消</translation></message>
@@ -42,6 +43,7 @@
     <message><source>All segments exported successfully!</source><translation>所有片段已成功导出！</translation></message>
     <message><source>&amp;View</source><translation>视图(&amp;V)</translation></message>
     <message><source>Toggle Theme</source><translation>切换主题</translation></message>
+    <message><source>Create Radio Video...</source><translation>制作电台视频...</translation></message>
 </context>
 <context>
     <name>ClipModel</name>
@@ -49,5 +51,50 @@
     <message><source>Start</source><translation>起点</translation></message>
     <message><source>End</source><translation>终点</translation></message>
     <message><source>Duration</source><translation>时长</translation></message>
+</context>
+<context>
+    <name>FFmpegRunner</name>
+    <message><source>Done</source><translation>完成</translation></message>
+    <message><source>Radio video created successfully.</source><translation>电台视频制作成功。</translation></message>
+    <message><source>Creating radio video...</source><translation>正在制作电台视频……</translation></message>
+</context>
+<context>
+    <name>RadioVideoDialog</name>
+    <message><source>Create Radio Video</source><translation>制作电台视频</translation></message>
+    <message><source>Choose Image...</source><translation>选择图片……</translation></message>
+    <message><source>(no image)</source><translation>（未选择图片）</translation></message>
+    <message><source>Cover preview</source><translation>封面预览</translation></message>
+    <message><source>Choose Audio...</source><translation>选择音频……</translation></message>
+    <message><source>(no audio)</source><translation>（未选择音频）</translation></message>
+    <message><source>Play</source><translation>播放</translation></message>
+    <message><source>Pause</source><translation>暂停</translation></message>
+    <message><source>Volume:</source><translation>音量：</translation></message>
+    <message><source>Mark In</source><translation>设为起点</translation></message>
+    <message><source>Mark Out</source><translation>设为终点</translation></message>
+    <message><source>Reset Marks</source><translation>重置标记</translation></message>
+    <message><source>Resolution:</source><translation>分辨率：</translation></message>
+    <message><source>1080x1080 (Square)</source><translation>1080x1080（正方形）</translation></message>
+    <message><source>Native (no resize)</source><translation>原始尺寸（不缩放）</translation></message>
+    <message><source>1920x1080 (16:9)</source><translation>1920x1080（16:9）</translation></message>
+    <message><source>1280x720 (16:9)</source><translation>1280x720（16:9）</translation></message>
+    <message><source>Export</source><translation>导出</translation></message>
+    <message><source>Cancel</source><translation>取消</translation></message>
+    <message><source>Choose Cover Image</source><translation>选择封面图片</translation></message>
+    <message><source>Image Files (*.png *.jpg *.jpeg *.bmp *.webp *.tiff);;All Files (*)</source><translation>图片文件 (*.png *.jpg *.jpeg *.bmp *.webp *.tiff);;所有文件 (*)</translation></message>
+    <message><source>Invalid Image</source><translation>图片无效</translation></message>
+    <message><source>Could not load the selected image file.</source><translation>无法加载所选的图片文件。</translation></message>
+    <message><source>Choose Audio File</source><translation>选择音频文件</translation></message>
+    <message><source>Audio Files (*.mp3 *.flac *.wav *.ogg *.aac *.m4a *.opus *.wma *.mka);;All Files (*)</source><translation>音频文件 (*.mp3 *.flac *.wav *.ogg *.aac *.m4a *.opus *.wma *.mka);;所有文件 (*)</translation></message>
+    <message><source>Mark Out must be after Mark In (%1).</source><translation>终点必须在起点（%1）之后。</translation></message>
+    <message><source>Save Radio Video</source><translation>保存电台视频</translation></message>
+    <message><source>Video Files (*.mp4 *.mkv *.mov *.webm);;All Files (*)</source><translation>视频文件 (*.mp4 *.mkv *.mov *.webm);;所有文件 (*)</translation></message>
+    <message><source>Creating radio video...</source><translation>正在制作电台视频……</translation></message>
+    <message><source>Cancelled.</source><translation>已取消。</translation></message>
+    <message><source>Cancelling...</source><translation>正在取消……</translation></message>
+    <message><source>Done</source><translation>完成</translation></message>
+    <message><source>Export Success</source><translation>导出成功</translation></message>
+    <message><source>Radio video created successfully!</source><translation>电台视频已成功制作！</translation></message>
+    <message><source>Export failed.</source><translation>导出失败。</translation></message>
+    <message><source>Export Failed</source><translation>导出失败</translation></message>
 </context>
 </TS>

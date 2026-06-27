@@ -2,6 +2,7 @@
 #include "MpvWidget.h"
 #include "ClipModel.h"
 #include "FFmpegRunner.h"
+#include "RadioVideoDialog.h"
 #include <QShortcut>
 #include <QLineEdit>
 #include <QVBoxLayout>
@@ -22,6 +23,7 @@
 #include <QCoreApplication>
 #include <QSettings>
 #include <QFileInfo>
+#include <memory>
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setupUI();
@@ -273,6 +275,9 @@ void MainWindow::retranslateUI() {
     connect(openAction, &QAction::triggered, this, &MainWindow::openFile);
     QAction *resetDirAction = fileMenu->addAction(tr("Reset Default Directory"));
     connect(resetDirAction, &QAction::triggered, this, &MainWindow::resetDefaultDirectory);
+    fileMenu->addSeparator();
+    QAction *radioAction = fileMenu->addAction(tr("Create Radio Video..."));
+    connect(radioAction, &QAction::triggered, this, &MainWindow::openRadioVideoDialog);
 
     QMenu *langMenu = menuBar()->addMenu(tr("&Language"));
     QAction *zhAction = langMenu->addAction("简体中文");
@@ -318,6 +323,11 @@ void MainWindow::openFile() {
         m_markOutLabel->setText("--:--:--.---");
         setWindowTitle(tr("Media Cutter") + " - " + QFileInfo(m_currentFilePath).fileName());
     }
+}
+
+void MainWindow::openRadioVideoDialog() {
+    RadioVideoDialog dialog(this);
+    dialog.exec();
 }
 
 void MainWindow::togglePlayback() {
@@ -432,6 +442,7 @@ void MainWindow::moveUp() {
     auto selection = m_queueView->selectionModel()->selectedRows();
     if (selection.empty()) return;
     int row = selection.first().row();
+    if (row <= 0) return; // already at the top; ClipModel is a no-op, but selectRow(-1) would clear the selection
     m_clipModel->moveUp(row);
     m_queueView->selectRow(row - 1);
 }
@@ -440,6 +451,7 @@ void MainWindow::moveDown() {
     auto selection = m_queueView->selectionModel()->selectedRows();
     if (selection.empty()) return;
     int row = selection.first().row();
+    if (row >= static_cast<int>(m_clipModel->segments().size()) - 1) return; // already at the bottom; avoid clearing the selection via selectRow(out-of-range)
     m_clipModel->moveDown(row);
     m_queueView->selectRow(row + 1);
 }
@@ -476,6 +488,12 @@ void MainWindow::exportMerged() {
     progress->show();
 
     FFmpegRunner *runner = new FFmpegRunner(this);
+    auto cancelled = std::make_shared<bool>(false);
+    // Wire the Cancel button (and Escape) so it actually stops FFmpeg.
+    connect(progress, &QProgressDialog::canceled, runner, [runner, cancelled]() {
+        *cancelled = true;
+        runner->cancel();
+    });
     connect(runner, &FFmpegRunner::progress, progress, [progress](int current, int total, const QString &status) {
         progress->setMaximum(total);
         progress->setValue(current);
@@ -483,7 +501,11 @@ void MainWindow::exportMerged() {
     });
     connect(runner, &FFmpegRunner::finished, this, [=](bool success, QString msg) {
         progress->close();
-        if (success) {
+        progress->deleteLater();
+        // Don't show an error dialog for a user-initiated cancel.
+        if (*cancelled) {
+            // nothing
+        } else if (success) {
             QMessageBox::information(this, tr("Export Success"), tr("Media exported successfully!"));
         } else {
             QMessageBox::critical(this, tr("Export Failed"), msg);
@@ -523,6 +545,12 @@ void MainWindow::exportIndividually() {
     progress->show();
 
     FFmpegRunner *runner = new FFmpegRunner(this);
+    auto cancelled = std::make_shared<bool>(false);
+    // Wire the Cancel button (and Escape) so it actually stops FFmpeg.
+    connect(progress, &QProgressDialog::canceled, runner, [runner, cancelled]() {
+        *cancelled = true;
+        runner->cancel();
+    });
     connect(runner, &FFmpegRunner::progress, progress, [progress](int current, int total, const QString &status) {
         progress->setMaximum(total);
         progress->setValue(current);
@@ -530,7 +558,11 @@ void MainWindow::exportIndividually() {
     });
     connect(runner, &FFmpegRunner::finished, this, [=](bool success, QString msg) {
         progress->close();
-        if (success) {
+        progress->deleteLater();
+        // Don't show an error dialog for a user-initiated cancel.
+        if (*cancelled) {
+            // nothing
+        } else if (success) {
             QMessageBox::information(this, tr("Export Success"), tr("All segments exported successfully!"));
         } else {
             QMessageBox::critical(this, tr("Export Failed"), msg);

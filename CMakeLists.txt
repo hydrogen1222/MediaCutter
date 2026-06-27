@@ -15,6 +15,8 @@ add_executable(MediaCutter
     src/MpvWidget.cpp
     src/ClipModel.cpp
     src/FFmpegRunner.cpp
+    src/AudioPlayerWidget.cpp
+    src/RadioVideoDialog.cpp
     src/resources.qrc
 )
 

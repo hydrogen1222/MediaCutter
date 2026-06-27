@@ -10,6 +10,7 @@ class QLabel;
 class QPushButton;
 class QTableView;
 class ClipModel;
+class RadioVideoDialog;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -35,6 +36,7 @@ private slots:
     void moveDown();
     void exportMerged();
     void exportIndividually();
+    void openRadioVideoDialog();
 
 private:
     void setupUI();

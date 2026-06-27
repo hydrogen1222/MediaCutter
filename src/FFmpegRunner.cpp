@@ -5,6 +5,95 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QRegularExpression>
+#include <QStringList>
+
+// FFmpeg prints its full banner, build configuration, and per-frame progress
+// to stderr even on a normal failure, so dumping readAllStandardError() into a
+// message box gives the user hundreds of unreadable lines. Pull out only the
+// lines that actually explain the failure.
+static QString summarizeFfmpegError(const QByteArray &rawStderr) {
+    const QString text = QString::fromLocal8Bit(rawStderr).trimmed();
+    if (text.isEmpty()) return QStringLiteral("FFmpeg process failed (no error output).");
+    const QStringList lines = text.split('\n');
+
+    static const QStringList noisePrefixes = {
+        QStringLiteral("frame="), QStringLiteral("Press "),
+        QStringLiteral("configuration:"), QStringLiteral("built with"),
+        QStringLiteral("libav"), QStringLiteral("libsw"),
+        QStringLiteral("ffmpeg version"), QStringLiteral("  usage: ")
+    };
+
+    QStringList relevant;
+    for (const QString &line : lines) {
+        const QString t = line.trimmed();
+        if (t.isEmpty()) continue;
+        bool isNoise = false;
+        for (const QString &p : noisePrefixes) {
+            if (t.startsWith(p, Qt::CaseInsensitive)) { isNoise = true; break; }
+        }
+        if (isNoise) continue;
+        if (t.contains("error", Qt::CaseInsensitive) ||
+            t.contains("failed", Qt::CaseInsensitive) ||
+            t.contains("invalid", Qt::CaseInsensitive) ||
+            t.contains("not found", Qt::CaseInsensitive) ||
+            t.contains("no such", Qt::CaseInsensitive) ||
+            t.contains("could not", Qt::CaseInsensitive) ||
+            t.contains("permission", Qt::CaseInsensitive) ||
+            t.contains("automatic encoder", Qt::CaseInsensitive) ||
+            t.contains("encoder not found", Qt::CaseInsensitive)) {
+            relevant << t;
+        }
+    }
+
+    if (relevant.isEmpty()) {
+        // No recognizable error keyword: fall back to the last few non-noise lines.
+        for (auto it = lines.rbegin(); it != lines.rend() && relevant.size() < 6; ++it) {
+            const QString t = it->trimmed();
+            if (t.isEmpty()) continue;
+            bool isNoise = false;
+            for (const QString &p : noisePrefixes) {
+                if (t.startsWith(p, Qt::CaseInsensitive)) { isNoise = true; break; }
+            }
+            if (isNoise) continue;
+            relevant.prepend(t);
+        }
+    }
+
+    while (relevant.size() > 15) relevant.removeFirst();
+    if (relevant.isEmpty()) return QStringLiteral("FFmpeg process failed:\n%1").arg(text);
+    return QStringLiteral("FFmpeg process failed:\n%1").arg(relevant.join('\n'));
+}
+
+// Probe whether libx264 is compiled into the user's FFmpeg (cached on first
+// call). We cannot assume optional encoders are present — libmp3lame was
+// absent on one test machine — so prefer libx264 (with -tune stillimage) when
+// available and fall back to the always-built mpeg4 otherwise.
+static bool libx264Available() {
+    static const bool available = []() {
+        QProcess probe;
+        probe.start("ffmpeg", QStringList() << "-hide_banner" << "-encoders");
+        if (!probe.waitForFinished(3000)) return false;
+        return probe.readAllStandardOutput().contains("libx264");
+    }();
+    return available;
+}
+
+// Get an audio file's duration (seconds) without an ffprobe dependency: run
+// `ffmpeg -i <file>` (no output) and parse the "Duration: HH:MM:SS.xx" line it
+// prints to stderr. Returns 0.0 if it can't be determined (the caller degrades
+// gracefully — no progress %, but the encode still runs via -shortest).
+static double probeAudioDuration(const QString &path) {
+    QProcess probe;
+    probe.start("ffmpeg", QStringList() << "-hide_banner" << "-i" << path);
+    if (!probe.waitForFinished(3000)) return 0.0;
+    const QString out = QString::fromLocal8Bit(probe.readAllStandardError());
+    QRegularExpression re(QStringLiteral("Duration:\\s*(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)"));
+    QRegularExpressionMatch m = re.match(out);
+    if (!m.hasMatch()) return 0.0;
+    return m.captured(1).toInt() * 3600.0
+         + m.captured(2).toInt() * 60.0
+         + m.captured(3).toDouble();
+}
 
 FFmpegRunner::FFmpegRunner(QObject *parent) : QObject(parent), m_process(new QProcess(this)) {
     connect(m_process, &QProcess::finished, this, &FFmpegRunner::onProcessFinished);
@@ -22,12 +111,12 @@ void FFmpegRunner::cutAndMerge(const QString &input, const std::vector<Segment> 
     m_tempFiles.clear();
 
     if (m_segments.empty()) {
-        emit finished(false, "No segments to export");
+        emitFinished(false, "No segments to export");
         return;
     }
 
     if (!m_tempDir.isValid()) {
-        emit finished(false, "Failed to create temporary directory");
+        emitFinished(false, "Failed to create temporary directory");
         return;
     }
 
@@ -71,16 +160,31 @@ void FFmpegRunner::runNextStep() {
             // Principle: maximize quality, aim for lossless or near-lossless
             // For lossy formats: do NOT hardcode encoder names (e.g. libmp3lame)
             // because they may not be compiled into the user's FFmpeg build.
-            // Instead, let FFmpeg auto-select and only set bitrate via -b:a.
+            // Instead, let FFmpeg auto-select the encoder and only guide the
+            // quality/bitrate. The setting must be chosen per format because
+            // a single fixed -b:a 320k is NOT universally valid: libvorbis and
+            // libopus reject 320k on mono streams (their bitrate caps are
+            // channel-count dependent), which would silently fail the export.
             if (outputExt == "flac") {
                 // Lossless: built-in FFmpeg encoder, always available
                 args << "-c:a" << "flac";
             } else if (outputExt == "wav") {
                 // Lossless: built-in FFmpeg encoder, always available
                 args << "-c:a" << "pcm_s24le";
+            } else if (outputExt == "ogg") {
+                // Vorbis: use VBR quality mode (-b:a is rejected on mono
+                // streams because vorbis' per-channel bitrate cap is lower
+                // than mp3's). q=10 is the maximum quality. FFmpeg still
+                // auto-selects libvorbis here; we only set the quality.
+                args << "-q:a" << "10";
+            } else if (outputExt == "opus") {
+                // Opus is transparent far below its ceiling; 256k is generous
+                // and safe for both mono and stereo (320k is rejected on mono).
+                args << "-b:a" << "256k";
             } else {
-                // Lossy formats (mp3, ogg, opus, aac, m4a, wma, mka, etc.)
-                // Let FFmpeg auto-detect the encoder; just set max bitrate
+                // mp3, aac, m4a, wma, mka, etc. — let FFmpeg auto-select the
+                // encoder and use a high bitrate. These encoders accept 320k
+                // on mono (mp3 max = 320k; aac/m4a handle it fine).
                 args << "-b:a" << "320k";
             }
         } else {
@@ -114,7 +218,7 @@ void FFmpegRunner::runNextStep() {
             }
             concatFile.close();
         } else {
-            emit finished(false, "Failed to create concat file");
+            emitFinished(false, "Failed to create concat file");
             return;
         }
 
@@ -133,7 +237,7 @@ void FFmpegRunner::runNextStep() {
             finalizeIndividualExport();
         } else {
             emit progress(m_segments.size() + 1, m_segments.size() + 1, "Done");
-            emit finished(true, "Export completed successfully");
+            emitFinished(true, "Export completed successfully");
         }
     }
 }
@@ -174,35 +278,55 @@ void FFmpegRunner::finalizeIndividualExport() {
             if (QFile::copy(m_tempFiles[i], newPath)) {
                 QFile::remove(m_tempFiles[i]);
             } else {
-                emit finished(false, QString("Failed to move segment %1 to destination (rename and copy failed)").arg(startIndex + i));
+                emitFinished(false, QString("Failed to move segment %1 to destination (rename and copy failed)").arg(startIndex + i));
                 return;
             }
         }
     }
 
-    emit finished(true, "Individual segments exported successfully");
+    emitFinished(true, "Individual segments exported successfully");
 }
 
 void FFmpegRunner::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus) {
+    if (m_radioVideoMode) {
+        // Single-shot radio-video encode: no step-loop. Reset the flag so a
+        // late finished()/errorOccurred() pair (e.g. after cancel()->kill())
+        // can't re-enter this branch. emitFinished() dedupes the notification.
+        m_radioVideoMode = false;
+        if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
+            emit progress(100, 100, tr("Done"));
+            emitFinished(true, tr("Radio video created successfully."));
+        } else {
+            // Progress travelled via stdout (-progress pipe:1), so stderr is
+            // untouched and still holds the real failure explanation.
+            emitFinished(false, summarizeFfmpegError(m_process->readAllStandardError()));
+        }
+        return;
+    }
+
     if (exitCode == 0 && exitStatus == QProcess::NormalExit) {
         if (!m_isMerging) {
             m_currentIndex++;
         }
         runNextStep();
     } else {
-        QString errorMsg = m_process->readAllStandardError();
-        emit finished(false, QString("FFmpeg process failed: %1").arg(errorMsg));
+        emitFinished(false, summarizeFfmpegError(m_process->readAllStandardError()));
     }
 }
 
 void FFmpegRunner::onProcessError(QProcess::ProcessError error) {
+    // QProcess emits both errorOccurred() and finished() when a process dies
+    // from a signal (a genuine crash, or our own cancel()/kill()); emitFinished()
+    // guarantees we notify the caller only once, regardless of which handler
+    // runs first. The "crashed" message is suppressed by MainWindow when the
+    // caller cancelled, so it only surfaces for a real crash.
     QString errorMsg;
     switch (error) {
         case QProcess::FailedToStart:
             errorMsg = "FFmpeg executable not found or failed to start. Check if FFmpeg is installed and in PATH.";
             break;
         case QProcess::Crashed:
-            errorMsg = "FFmpeg process crashed.";
+            errorMsg = "FFmpeg process crashed or was terminated.";
             break;
         case QProcess::Timedout:
             errorMsg = "FFmpeg process timed out.";
@@ -218,5 +342,131 @@ void FFmpegRunner::onProcessError(QProcess::ProcessError error) {
             errorMsg = "Unknown FFmpeg process error.";
             break;
     }
-    emit finished(false, errorMsg);
+    emitFinished(false, errorMsg);
+}
+
+void FFmpegRunner::cancel() {
+    if (m_finished) return;
+    if (m_process->state() == QProcess::NotRunning) {
+        // Between steps: nothing to kill, just report.
+        emitFinished(false, "Export cancelled by user");
+    } else {
+        // Killing triggers errorOccurred()+finished(); emitFinished() will
+        // dedupe, and MainWindow suppresses the dialog because it set its
+        // own cancelled flag before calling us.
+        m_process->kill();
+    }
+}
+
+void FFmpegRunner::emitFinished(bool success, const QString &message) {
+    if (m_finished) return;
+    m_finished = true;
+    emit finished(success, message);
+}
+
+void FFmpegRunner::createRadioVideo(const QString &imagePath, const QString &audioPath,
+                                    double startSec, double endSec, const QString &framing,
+                                    const QString &outputPath) {
+    // Reset state for this (possibly reused) runner.
+    m_radioVideoMode = true;
+    m_finished = false;
+    m_progressStdoutBuf.clear();
+    m_startSec = qMax(0.0, startSec);
+    m_endSec = endSec;                       // < 0 => whole file
+    m_audioDuration = probeAudioDuration(audioPath);
+    if (m_endSec < 0.0) {
+        m_endSec = m_audioDuration;          // whole file
+    } else if (m_audioDuration > 0.0 && m_endSec > m_audioDuration) {
+        m_endSec = m_audioDuration;          // clamp overshoot
+    }
+
+    // Verified command:
+    //   ffmpeg -y -loop 1 -framerate 5 -i <image> [-ss <s> -to <e>] -i <audio>
+    //          -vf <vf> -c:v <libx264 -tune stillimage | mpeg4>
+    //          -r 5 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest -progress pipe:1 <out>
+    QStringList args;
+    args << "-y" << "-loop" << "1" << "-framerate" << "5" << "-i" << imagePath;
+
+    // Trim = INPUT options on the audio input (verified: -ss 2 -to 5 -> 3.000s).
+    // Apply only when the user actually narrowed the range below the whole file.
+    const bool trimmed = (m_startSec > 0.0) ||
+                         (m_audioDuration > 0.0 && m_endSec < m_audioDuration - 0.001);
+    if (trimmed) {
+        args << "-ss" << QString::number(m_startSec, 'f', 6)
+             << "-to" << QString::number(m_endSec, 'f', 6);
+    }
+    args << "-i" << audioPath;
+
+    // Video filter per framing choice. Every option ends with even-dimension
+    // safety + yuv420p so libx264/mpeg4 accept the frames.
+    QString vf;
+    if (framing == QStringLiteral("Native")) {
+        vf = QStringLiteral("scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p");
+    } else if (framing == QStringLiteral("1920x1080")) {
+        vf = QStringLiteral("scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p");
+    } else if (framing == QStringLiteral("1280x720")) {
+        vf = QStringLiteral("scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p");
+    } else {
+        // "1080x1080" (and any unrecognized value) — square is the radio default.
+        vf = QStringLiteral("scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p");
+    }
+    args << "-vf" << vf;
+
+    if (libx264Available()) {
+        args << "-c:v" << "libx264" << "-tune" << "stillimage";
+    } else {
+        args << "-c:v" << "mpeg4";
+    }
+    // Low fps (5) for a static image: visually identical to 25fps but far
+    // smaller files — important for multi-hour radio episodes.
+    args << "-r" << "5" << "-pix_fmt" << "yuv420p"
+         << "-c:a" << "aac" << "-b:a" << "192k";
+
+    // Cap output duration explicitly. -shortest is UNRELIABLE with -loop 1 —
+    // in testing it produced ~2x the audio length (24s for a 12s clip) because
+    // the looped-image/audio stream-end timing miscomputes. -t with the known
+    // (probed or marked) duration is exact. Fall back to -shortest only when the
+    // duration is genuinely unknown (probe failed AND no marks set).
+    const double dur = (m_endSec > m_startSec) ? (m_endSec - m_startSec) : m_audioDuration;
+    if (dur > 0.0) {
+        args << "-t" << QString::number(dur, 'f', 3);
+    } else {
+        args << "-shortest";
+    }
+    // Progress stats go to stdout (parseable key=value); errors stay on
+    // stderr for summarizeFfmpegError().
+    args << "-progress" << "pipe:1"
+         << outputPath;
+
+    connect(m_process, &QProcess::readyReadStandardOutput,
+            this, &FFmpegRunner::parseRadioProgress, Qt::UniqueConnection);
+
+    emit progress(0, 100, tr("Creating radio video..."));
+    m_process->start("ffmpeg", args);
+}
+
+void FFmpegRunner::parseRadioProgress() {
+    if (!m_radioVideoMode) return;
+    m_progressStdoutBuf += m_process->readAllStandardOutput();
+
+    // Parse only complete (newline-terminated) lines so a half-written value is
+    // never read; keep any trailing partial line for the next call. This also
+    // bounds the buffer to ~one chunk — no unbounded growth over long encodes.
+    const int nl = m_progressStdoutBuf.lastIndexOf('\n');
+    if (nl < 0) return;
+    const QString complete = QString::fromLatin1(m_progressStdoutBuf.left(nl + 1));
+    m_progressStdoutBuf = m_progressStdoutBuf.mid(nl + 1);
+
+    // out_time_us = output time in microseconds. For a trimmed encode it runs
+    // 0..(end-start); for whole-file, 0..duration — so the denominator matches.
+    static const QRegularExpression re(QStringLiteral("out_time_us=(\\d+)"));
+    auto it = re.globalMatch(complete);
+    double cur = -1.0;
+    while (it.hasNext()) cur = it.next().captured(1).toLongLong() / 1000000.0;
+    if (cur < 0.0) return;
+
+    const double denom = (m_endSec > m_startSec) ? (m_endSec - m_startSec) : m_audioDuration;
+    if (denom <= 0.0) return;
+    emit progress(qBound(0, static_cast<int>(cur / denom * 100.0), 99), 100,
+                  tr("Creating radio video..."));
 }
