@@ -33,9 +33,11 @@ public:
     // smoothly even when the source is low-fps (e.g. a 5fps radio video).
     // crf is the libx264 CRF (lower = better; ~18 is visually lossless) and also
     // the QP target when a hardware encoder is used. The encoder is chosen
-    // automatically: a working hardware encoder (NVENC/QuickSync/AMF/VAAPI) if
-    // one is usable, otherwise libx264 (-preset veryfast, all CPU cores) or the
-    // mpeg4 fallback. Emits progress + finished like above.
+    // automatically: a working hardware encoder (NVENC/QuickSync/VAAPI) if one is
+    // usable, otherwise libx264 (-preset veryfast, all CPU cores) or the mpeg4
+    // fallback. (AMF is intentionally skipped - see detectHwEncoder.) A startup
+    // watchdog also retries on libx264 if the chosen encoder stalls on the real
+    // encode. Emits progress + finished like above.
     void burnSubtitles(const QString &videoPath, const QString &assPath,
                        const QString &outputPath, int fps, int crf);
 

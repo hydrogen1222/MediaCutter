@@ -126,10 +126,17 @@ static bool encoderWorks(const QStringList &args) {
 static bool g_hwEncoderBad = false;
 
 // Best usable hardware H.264 encoder, probed once and cached. Priority:
-// nvenc (NVIDIA) > qsv (Intel) > amf (AMD, mostly Windows) > vaapi (Linux
-// Intel/AMD). Each candidate is actually exercised (not just listed) before it
-// is accepted, so a machine with no matching GPU falls through to the next.
-// An empty `name` means "no working hardware encoder - use the software path".
+// nvenc (NVIDIA) > qsv (Intel) > vaapi (Linux Intel/AMD). Each candidate is
+// actually exercised (not just listed) before it is accepted, so a machine
+// with no matching GPU falls through to the next. An empty `name` means "no
+// working hardware encoder - use the software path".
+//
+// h264_amf (AMD/Windows) is intentionally NOT probed: its synthetic probe
+// passes even when the real encode deadlocks (observed on AMD 780M / RDNA3:
+// 0% progress, no CPU/GPU use), and no probe args we tried could tell the two
+// apart. Auto-selecting it made exports hang forever. AMD users on Windows get
+// libx264 (all CPU cores); AMD users on Linux still get VAAPI. If AMF stabilizes
+// in the future it can be re-added behind the startup watchdog.
 struct HwEncoder { QString name; QString vaapiDevice; };
 static HwEncoder detectHwEncoder() {
     // A HW encoder already proved unreliable this session: skip it entirely.
@@ -157,16 +164,6 @@ static HwEncoder detectHwEncoder() {
             r.name = QStringLiteral("h264_qsv");
             return r;
         }
-        // AMF (AMD, mostly Windows): accepts software frames directly.
-        if (encoderWorks(QStringList()
-                << "-hide_banner" << "-y"
-                << "-f" << "lavfi" << "-i" << "testsrc=duration=0.2:size=320x240:rate=5"
-                << "-pix_fmt" << "yuv420p"
-                << "-c:v" << "h264_amf" << "-quality" << "balanced" << "-rc" << "cqp" << "-qp" << "20"
-                << "-f" << "null" << "-")) {
-            r.name = QStringLiteral("h264_amf");
-            return r;
-        }
         // VAAPI (Linux Intel/AMD): needs a render device + an explicit hwupload
         // because the ass/scale filters run in software.
         const QString dev = findVaapiDevice();
@@ -189,7 +186,7 @@ static HwEncoder detectHwEncoder() {
 
 // Everything a single-shot encode needs to know about its video encoder,
 // produced once per export. Priority: a working hardware encoder (nvenc/qsv/
-// amf/vaapi) > libx264 > mpeg4. baseFilter is the filter chain BEFORE any
+// vaapi) > libx264 > mpeg4. baseFilter is the filter chain BEFORE any
 // hardware upload (e.g. "scale=...,format=yuv420p" or "ass=<path>"); the plan
 // appends any format/hwupload suffix the chosen encoder requires. crf is the
 // libx264 CRF and also the hardware QP target (lower = better). stillImage adds
@@ -214,10 +211,6 @@ static VideoEncodePlan buildVideoEncodePlan(const QString &baseFilter, int crf, 
         p.label = QStringLiteral("QuickSync");
         p.filter = baseFilter + QStringLiteral(",format=yuv420p");
         p.args << "-c:v" << "h264_qsv" << "-preset" << "veryfast" << "-global_quality" << q;
-    } else if (hw.name == QLatin1String("h264_amf")) {
-        p.label = QStringLiteral("AMF");
-        p.filter = baseFilter + QStringLiteral(",format=yuv420p");
-        p.args << "-c:v" << "h264_amf" << "-quality" << "balanced" << "-rc" << "cqp" << "-qp" << q;
     } else if (hw.name == QLatin1String("h264_vaapi")) {
         p.label = QStringLiteral("VAAPI");
         p.globalArgs << "-vaapi_device" << hw.vaapiDevice;
@@ -787,11 +780,16 @@ void FFmpegRunner::parseEncodeProgress() {
     double cur = -1.0;
     while (it.hasNext()) cur = it.next().captured(1).toLongLong() / 1000000.0;
     if (cur < 0.0) return;
-    // A non-negative out_time_us means the encoder actually produced a frame:
-    // it is not hung. Latch this and disarm the startup watchdog so it can't
-    // fire a false fallback after a legitimately slow first frame.
-    m_gotProgress = true;
-    m_watchdog->stop();
+    // Only a STRICTLY POSITIVE out_time_us proves the encoder has produced a
+    // frame past time 0. A value of 0 appears in early -progress blocks before
+    // any frame is done, and a deadlocked HW encoder can emit those 0-time
+    // blocks indefinitely - so 0 must NOT disarm the watchdog (that was the
+    // v1.9.1 bug: AMF spammed out_time_us=0, the watchdog was disarmed, and the
+    // encode hung at 0% forever).
+    if (cur > 0.0) {
+        m_gotProgress = true;
+        m_watchdog->stop();
+    }
 
     if (m_progressTotal <= 0.0) return;
     emit progress(qBound(0, static_cast<int>(cur / m_progressTotal * 100.0), 99), 100,
