@@ -96,6 +96,147 @@ static double probeMediaDuration(const QString &path) {
          + m.captured(3).toDouble();
 }
 
+// Locate the first usable VAAPI render node (e.g. /dev/dri/renderD128). Render
+// nodes have minor numbers >= 128; we probe renderD128..renderD159 and return
+// the first that exists. Empty if none (=> no VAAPI on this machine).
+static QString findVaapiDevice() {
+    for (int i = 0; i < 32; ++i) {
+        const QString path = QStringLiteral("/dev/dri/renderD%1").arg(128 + i);
+        if (QFileInfo(path).exists()) return path;
+    }
+    return QString();
+}
+
+// Run a tiny throwaway encode to confirm an encoder actually works on THIS
+// hardware. A compiled-in encoder (h264_nvenc etc.) is useless without the
+// matching GPU + driver, so listing it in `ffmpeg -encoders` is not enough -
+// we must exercise it. Returns true only if ffmpeg exited 0 within the timeout.
+static bool encoderWorks(const QStringList &args) {
+    QProcess p;
+    p.start("ffmpeg", args);
+    if (!p.waitForFinished(8000)) { p.kill(); p.waitForFinished(2000); return false; }
+    return p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0;
+}
+
+// Best usable hardware H.264 encoder, probed once and cached. Priority:
+// nvenc (NVIDIA) > qsv (Intel) > amf (AMD, mostly Windows) > vaapi (Linux
+// Intel/AMD). Each candidate is actually exercised (not just listed) before it
+// is accepted, so a machine with no matching GPU falls through to the next.
+// An empty `name` means "no working hardware encoder - use the software path".
+struct HwEncoder { QString name; QString vaapiDevice; };
+static HwEncoder detectHwEncoder() {
+    static const HwEncoder cached = []() {
+        HwEncoder r;
+        // NVENC (NVIDIA): accepts software frames directly (uploads internally).
+        if (encoderWorks(QStringList()
+                << "-hide_banner" << "-y"
+                << "-f" << "lavfi" << "-i" << "testsrc=duration=0.2:size=320x240:rate=5"
+                << "-pix_fmt" << "yuv420p"
+                << "-c:v" << "h264_nvenc" << "-preset" << "p5" << "-tune" << "hq"
+                << "-rc" << "vbr" << "-cq" << "20" << "-b:v" << "0"
+                << "-f" << "null" << "-")) {
+            r.name = QStringLiteral("h264_nvenc");
+            return r;
+        }
+        // Quick Sync (Intel): accepts software frames (uploads internally).
+        if (encoderWorks(QStringList()
+                << "-hide_banner" << "-y"
+                << "-f" << "lavfi" << "-i" << "testsrc=duration=0.2:size=320x240:rate=5"
+                << "-pix_fmt" << "yuv420p"
+                << "-c:v" << "h264_qsv" << "-preset" << "veryfast" << "-global_quality" << "20"
+                << "-f" << "null" << "-")) {
+            r.name = QStringLiteral("h264_qsv");
+            return r;
+        }
+        // AMF (AMD, mostly Windows): accepts software frames directly.
+        if (encoderWorks(QStringList()
+                << "-hide_banner" << "-y"
+                << "-f" << "lavfi" << "-i" << "testsrc=duration=0.2:size=320x240:rate=5"
+                << "-pix_fmt" << "yuv420p"
+                << "-c:v" << "h264_amf" << "-quality" << "balanced" << "-rc" << "cqp" << "-qp" << "20"
+                << "-f" << "null" << "-")) {
+            r.name = QStringLiteral("h264_amf");
+            return r;
+        }
+        // VAAPI (Linux Intel/AMD): needs a render device + an explicit hwupload
+        // because the ass/scale filters run in software.
+        const QString dev = findVaapiDevice();
+        if (!dev.isEmpty() &&
+            encoderWorks(QStringList()
+                << "-hide_banner" << "-y"
+                << "-vaapi_device" << dev
+                << "-f" << "lavfi" << "-i" << "testsrc=duration=0.2:size=320x240:rate=5"
+                << "-vf" << "format=nv12,hwupload"
+                << "-c:v" << "h264_vaapi" << "-rc_mode" << "CQP" << "-qp" << "20"
+                << "-f" << "null" << "-")) {
+            r.name = QStringLiteral("h264_vaapi");
+            r.vaapiDevice = dev;
+            return r;
+        }
+        return r;  // none - caller falls back to libx264
+    }();
+    return cached;
+}
+
+// Everything a single-shot encode needs to know about its video encoder,
+// produced once per export. Priority: a working hardware encoder (nvenc/qsv/
+// amf/vaapi) > libx264 > mpeg4. baseFilter is the filter chain BEFORE any
+// hardware upload (e.g. "scale=...,format=yuv420p" or "ass=<path>"); the plan
+// appends any format/hwupload suffix the chosen encoder requires. crf is the
+// libx264 CRF and also the hardware QP target (lower = better). stillImage adds
+// libx264's -tune stillimage (radio video only).
+struct VideoEncodePlan {
+    QString label;          // human-readable encoder name for the status line
+    QStringList globalArgs; // options that must precede -i (e.g. -vaapi_device)
+    QString filter;         // complete -vf value
+    QStringList args;       // -c:v ... + quality/preset/thread/pix_fmt flags
+};
+static VideoEncodePlan buildVideoEncodePlan(const QString &baseFilter, int crf, bool stillImage) {
+    VideoEncodePlan p;
+    const HwEncoder hw = detectHwEncoder();
+    const QString q = QString::number(qBound(1, crf, 51));
+
+    if (hw.name == QLatin1String("h264_nvenc")) {
+        p.label = QStringLiteral("NVENC");
+        p.filter = baseFilter + QStringLiteral(",format=yuv420p");
+        p.args << "-c:v" << "h264_nvenc" << "-preset" << "p5" << "-tune" << "hq"
+               << "-rc" << "vbr" << "-cq" << q << "-b:v" << "0";
+    } else if (hw.name == QLatin1String("h264_qsv")) {
+        p.label = QStringLiteral("QuickSync");
+        p.filter = baseFilter + QStringLiteral(",format=yuv420p");
+        p.args << "-c:v" << "h264_qsv" << "-preset" << "veryfast" << "-global_quality" << q;
+    } else if (hw.name == QLatin1String("h264_amf")) {
+        p.label = QStringLiteral("AMF");
+        p.filter = baseFilter + QStringLiteral(",format=yuv420p");
+        p.args << "-c:v" << "h264_amf" << "-quality" << "balanced" << "-rc" << "cqp" << "-qp" << q;
+    } else if (hw.name == QLatin1String("h264_vaapi")) {
+        p.label = QStringLiteral("VAAPI");
+        p.globalArgs << "-vaapi_device" << hw.vaapiDevice;
+        p.filter = baseFilter + QStringLiteral(",format=nv12,hwupload");
+        p.args << "-c:v" << "h264_vaapi" << "-rc_mode" << "CQP" << "-qp" << q;
+    } else if (libx264Available()) {
+        // Software fallback. -preset veryfast is ~4x faster than the default
+        // "medium" at the same CRF (same visual quality, only ~25% larger files),
+        // and -threads 0 lets libx264 use every logical CPU core for frame
+        // threading - the "use all resources" lever for machines with no GPU.
+        p.label = QStringLiteral("libx264");
+        p.filter = baseFilter;
+        p.args << "-c:v" << "libx264"
+               << "-preset" << "veryfast"
+               << "-crf" << q
+               << "-threads" << "0"
+               << "-pix_fmt" << "yuv420p";
+        if (stillImage) p.args << "-tune" << "stillimage";
+    } else {
+        p.label = QStringLiteral("mpeg4");
+        p.filter = baseFilter;
+        p.args << "-c:v" << "mpeg4" << "-q:v" << "2"
+               << "-threads" << "0"
+               << "-pix_fmt" << "yuv420p";
+    }
+    return p;
+}
+
 // Escape a path for use as the value of an ffmpeg filtergraph option such as
 // `ass=<path>`. ffmpeg parses filter args in two levels: the filtergraph
 // (where space, ',', ';', '[' and ']' separate, and single quotes group) and
@@ -402,13 +543,37 @@ void FFmpegRunner::createRadioVideo(const QString &imagePath, const QString &aud
     const double dur = (endSec > startSec) ? (endSec - startSec) : audioDuration;
     m_progressTotal = dur;
 
+    // Video filter per framing choice. Every option ends with even-dimension
+    // safety + yuv420p so software encoders accept the frames; the chosen
+    // encoder's plan appends any extra format/hwupload suffix it needs.
+    QString vf;
+    if (framing == QStringLiteral("Native")) {
+        vf = QStringLiteral("scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p");
+    } else if (framing == QStringLiteral("1920x1080")) {
+        vf = QStringLiteral("scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p");
+    } else if (framing == QStringLiteral("1280x720")) {
+        vf = QStringLiteral("scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p");
+    } else {
+        // "1080x1080" (and any unrecognized value) - square is the radio default.
+        vf = QStringLiteral("scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p");
+    }
+
+    // Pick the best encoder (hardware if usable, else libx264/mpeg4) and build
+    // its args + any required filter suffix. For a static image the bitrate is
+    // tiny regardless of preset, so libx264's -preset veryfast trades a little
+    // size for a big speedup. Reflect the chosen encoder in the status line so
+    // the user can see HW acceleration is active.
+    const VideoEncodePlan plan = buildVideoEncodePlan(vf, 23, true /*stillImage*/);
+    m_progressLabel = tr("Creating radio video...") + QStringLiteral(" [%1]").arg(plan.label);
+
     // Verified command:
-    //   ffmpeg -y -loop 1 -framerate 5 -i <image> [-ss <s> -to <e>] -i <audio>
-    //          -vf <vf> -c:v <libx264 -tune stillimage | mpeg4>
-    //          -g 5 -keyint_min 5 -r 5 -pix_fmt yuv420p -c:a aac -b:a 192k
+    //   ffmpeg -y [<vaapi_device>] -loop 1 -framerate 5 -i <image>
+    //          [-ss <s> -to <e>] -i <audio> -vf <vf> <encoder args>
+    //          -g 5 -keyint_min 5 -r 5 -c:a aac -b:a 192k
     //          -t <dur> -progress pipe:1 <out>
     QStringList args;
-    args << "-y" << "-loop" << "1" << "-framerate" << "5" << "-i" << imagePath;
+    args << "-y" << plan.globalArgs
+         << "-loop" << "1" << "-framerate" << "5" << "-i" << imagePath;
 
     // Trim = INPUT options on the audio input (verified: -ss 2 -to 5 -> 3.000s).
     // Apply only when the user actually narrowed the range below the whole file.
@@ -420,26 +585,7 @@ void FFmpegRunner::createRadioVideo(const QString &imagePath, const QString &aud
     }
     args << "-i" << audioPath;
 
-    // Video filter per framing choice. Every option ends with even-dimension
-    // safety + yuv420p so libx264/mpeg4 accept the frames.
-    QString vf;
-    if (framing == QStringLiteral("Native")) {
-        vf = QStringLiteral("scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p");
-    } else if (framing == QStringLiteral("1920x1080")) {
-        vf = QStringLiteral("scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p");
-    } else if (framing == QStringLiteral("1280x720")) {
-        vf = QStringLiteral("scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p");
-    } else {
-        // "1080x1080" (and any unrecognized value) — square is the radio default.
-        vf = QStringLiteral("scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p");
-    }
-    args << "-vf" << vf;
-
-    if (libx264Available()) {
-        args << "-c:v" << "libx264" << "-tune" << "stillimage";
-    } else {
-        args << "-c:v" << "mpeg4";
-    }
+    args << "-vf" << plan.filter << plan.args;
     // Frequent keyframes so the output is seekable: at 5 fps, -g 5 = one
     // keyframe per second. With libx264's default GOP of 250 frames the
     // keyframes were 50s apart, so players (PotPlayer etc.) jumped 50s per
@@ -447,8 +593,7 @@ void FFmpegRunner::createRadioVideo(const QString &imagePath, const QString &aud
     args << "-g" << "5" << "-keyint_min" << "5";
     // Low fps (5) for a static image: visually identical to 25fps but far
     // smaller files — important for multi-hour radio episodes.
-    args << "-r" << "5" << "-pix_fmt" << "yuv420p"
-         << "-c:a" << "aac" << "-b:a" << "192k";
+    args << "-r" << "5" << "-c:a" << "aac" << "-b:a" << "192k";
 
     // Cap output duration explicitly. -shortest is UNRELIABLE with -loop 1 —
     // in testing it produced ~2x the audio length (24s for a 12s clip) because
@@ -500,22 +645,26 @@ void FFmpegRunner::burnSubtitles(const QString &videoPath, const QString &assPat
     // Progress denominator = the input video's duration (probed).
     m_progressTotal = probeMediaDuration(videoPath);
 
-    // Verified command:
-    //   ffmpeg -y -i <video> -vf ass=<escaped ass> -c:v <libx264 -crf N | mpeg4>
-    //          -r <fps> -pix_fmt yuv420p -c:a copy -progress pipe:1 <out>
-    QStringList args;
-    args << "-y" << "-i" << videoPath
-         << "-vf" << (QStringLiteral("ass=") + escapeFilterPath(tempAss));
+    // Pick the encoder (hardware if usable, else libx264/mpeg4). -preset
+    // veryfast replaces "medium": ~4x faster at the same CRF (same visual
+    // quality, slightly larger files), and -threads 0 uses every CPU core. The
+    // crf (18 = visually lossless) is also the hardware QP target. The chosen
+    // encoder is surfaced in the status line.
+    const QString baseFilter = QStringLiteral("ass=") + escapeFilterPath(tempAss);
+    const VideoEncodePlan plan = buildVideoEncodePlan(baseFilter, crf, false /*stillImage*/);
+    m_progressLabel = tr("Burning subtitles...") + QStringLiteral(" [%1]").arg(plan.label);
 
-    if (libx264Available()) {
-        args << "-c:v" << "libx264" << "-crf" << QString::number(crf) << "-preset" << "medium";
-    } else {
-        args << "-c:v" << "mpeg4" << "-q:v" << "2";
-    }
+    // Verified command:
+    //   ffmpeg -y [<vaapi_device>] -i <video> -vf ass=<escaped ass>[,format=...,hwupload]
+    //          <encoder args> -r <fps> -c:a copy -progress pipe:1 <out>
+    QStringList args;
+    args << "-y" << plan.globalArgs
+         << "-i" << videoPath
+         << "-vf" << plan.filter
+         << plan.args;
     // A normal fps so ASS effects (\move, transforms) animate smoothly even
     // when the source is low-fps (e.g. a 5fps radio video).
     args << "-r" << QString::number(qMax(1, fps))
-         << "-pix_fmt" << "yuv420p"
          << "-c:a" << "copy";   // audio is unchanged by subtitle burn
     args << "-progress" << "pipe:1"
          << outputPath;
