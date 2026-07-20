@@ -259,6 +259,9 @@ FFmpegRunner::FFmpegRunner(QObject *parent)
     : QObject(parent), m_process(new QProcess(this)), m_watchdog(new QTimer(this)) {
     connect(m_process, &QProcess::finished, this, &FFmpegRunner::onProcessFinished);
     connect(m_process, &QProcess::errorOccurred, this, &FFmpegRunner::onProcessError);
+    // Keep ffmpeg's stderr drained into m_stderrBuf at all times (a full OS
+    // pipe could otherwise block ffmpeg) and surface it for diagnostics.
+    connect(m_process, &QProcess::readyReadStandardError, this, &FFmpegRunner::onFfmpegStderr);
     m_watchdog->setSingleShot(true);
     connect(m_watchdog, &QTimer::timeout, this, &FFmpegRunner::onWatchdogTimeout);
 }
@@ -366,6 +369,8 @@ void FFmpegRunner::runNextStep() {
              << "-y" << tempFile;
 
         emit progress(m_currentIndex, m_segments.size() + 1, QString("Cutting segment %1...").arg(m_currentIndex + 1));
+        m_stderrBuf.clear();
+        qDebug().noquote() << "[ffmpeg] cut cmd:" << args;
         m_process->start("ffmpeg", args);
     } else if (!m_isMerging && m_mergeAfterCut) {
         // Merging step
@@ -394,6 +399,8 @@ void FFmpegRunner::runNextStep() {
              << "-y" << m_output;
 
         emit progress(m_segments.size(), m_segments.size() + 1, "Merging segments...");
+        m_stderrBuf.clear();
+        qDebug().noquote() << "[ffmpeg] merge cmd:" << args;
         m_process->start("ffmpeg", args);
     } else {
         if (!m_mergeAfterCut) {
@@ -452,6 +459,10 @@ void FFmpegRunner::finalizeIndividualExport() {
 
 void FFmpegRunner::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus) {
     m_watchdog->stop();
+    qDebug().noquote() << "[ffmpeg] finished exitCode=" << exitCode
+                       << "status=" << exitStatus
+                       << "singleShot=" << m_singleShot
+                       << "retrying=" << m_retrying;
 
     if (m_retrying) {
         // The watchdog killed a hung hardware-encoder run. Retry once on the
@@ -481,9 +492,9 @@ void FFmpegRunner::onProcessFinished(int exitCode, QProcess::ExitStatus exitStat
             emit progress(100, 100, m_progressLabel);
             emitFinished(true, m_successMessage);
         } else {
-            // Progress travelled via stdout (-progress pipe:1), so stderr is
-            // untouched and still holds the real failure explanation.
-            emitFinished(false, summarizeFfmpegError(m_process->readAllStandardError()));
+            // m_stderrBuf holds ffmpeg's drained stderr (progress went via
+            // stdout on -progress pipe:1), so it has the real failure reason.
+            emitFinished(false, summarizeFfmpegError(m_stderrBuf));
         }
         return;
     }
@@ -494,11 +505,12 @@ void FFmpegRunner::onProcessFinished(int exitCode, QProcess::ExitStatus exitStat
         }
         runNextStep();
     } else {
-        emitFinished(false, summarizeFfmpegError(m_process->readAllStandardError()));
+        emitFinished(false, summarizeFfmpegError(m_stderrBuf));
     }
 }
 
 void FFmpegRunner::onProcessError(QProcess::ProcessError error) {
+    qDebug().noquote() << "[ffmpeg] errorOccurred=" << error << "retrying=" << m_retrying;
     if (m_retrying) return;  // watchdog-driven kill: onProcessFinished handles the retry
     m_watchdog->stop();
     // QProcess emits both errorOccurred() and finished() when a process dies
@@ -552,13 +564,31 @@ void FFmpegRunner::emitFinished(bool success, const QString &message) {
     emit finished(success, message);
 }
 
+void FFmpegRunner::onFfmpegStderr() {
+    const QByteArray chunk = m_process->readAllStandardError();
+    if (chunk.isEmpty()) return;
+    m_stderrBuf += chunk;
+    // Echo ffmpeg's own output to the console for single-shot encodes, where a
+    // hang is otherwise invisible (0% progress, no error). ffmpeg with
+    // -nostats -hide_banner prints only the input/output/stream-mapping lines
+    // plus any warnings/errors - so this shows exactly how far it got. Cut/merge
+    // (stream copy, fast, never reported to hang) is kept quiet to avoid
+    // flooding the console with per-frame stats.
+    if (m_singleShot) {
+        qDebug().noquote() << "[ffmpeg]" << QString::fromLocal8Bit(chunk).trimmed();
+    }
+}
+
 void FFmpegRunner::onWatchdogTimeout() {
     // Only single-shot encodes arm the watchdog. If real progress arrived since
     // it started, the encode is healthy and the timer fired late - nothing to do.
     if (m_gotProgress) return;
     m_watchdog->stop();
+    qDebug().noquote() << "[ffmpeg] WATCHDOG fired - no output frame in 20s."
+                       << "forceSoftware=" << m_forceSoftware
+                       << "stderrSoFar:\n" << QString::fromLocal8Bit(m_stderrBuf).trimmed();
 
-    if (!m_forceSoftware) {
+    if (!m_forceSoftware && m_usedHw) {
         // A hardware encoder passed its synthetic probe but produced no output on
         // the real encode - it is deadlocked (observed with AMF on AMD 780M: 0%
         // progress, no CPU/GPU use). Disable HW for the rest of the session so
@@ -567,12 +597,14 @@ void FFmpegRunner::onWatchdogTimeout() {
         // m_retrying) + finished() (which defers the software retry).
         g_hwEncoderBad = true;
         m_retrying = true;
+        qDebug() << "[ffmpeg] watchdog: HW encoder stalled - retrying on libx264";
         m_process->kill();
         return;
     }
-    // Already on the software path and still no progress - genuinely stuck.
-    // Kill and let the normal failure path report it (extremely unlikely with
-    // libx264, but never hang the UI forever).
+    // Already on the software path (no HW was available, or the HW retry also
+    // stalled) and still no progress - genuinely stuck. Kill and let the normal
+    // failure path report it. Retrying libx264-with-libx264 would be pointless.
+    qDebug() << "[ffmpeg] watchdog: software encode stalled - no fallback available";
     m_process->kill();
 }
 
@@ -594,7 +626,10 @@ void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString 
     m_singleShot = true;
     m_finished = false;
     m_progressStdoutBuf.clear();
+    m_stderrBuf.clear();
+    m_lastLoggedPct = -1;
     m_forceSoftware = forceSoftware;
+    m_usedHw = false;
     m_gotProgress = false;
     m_retrying = false;
     m_successMessage = tr("Radio video created successfully.");
@@ -631,6 +666,9 @@ void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString 
     // size for a big speedup. Reflect the chosen encoder in the status line so
     // the user can see HW acceleration is active.
     const VideoEncodePlan plan = buildVideoEncodePlan(vf, 23, true /*stillImage*/, forceSoftware);
+    m_usedHw = (plan.label == QLatin1String("NVENC") ||
+                plan.label == QLatin1String("QuickSync") ||
+                plan.label == QLatin1String("VAAPI"));
     m_progressLabel = tr("Creating radio video...") + QStringLiteral(" [%1]").arg(plan.label);
 
     // Verified command:
@@ -639,7 +677,7 @@ void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString 
     //          -g 5 -keyint_min 5 -r 5 -c:a aac -b:a 192k
     //          -t <dur> -progress pipe:1 <out>
     QStringList args;
-    args << "-y" << plan.globalArgs
+    args << "-y" << "-hide_banner" << "-nostats" << plan.globalArgs
          << "-loop" << "1" << "-framerate" << "5" << "-i" << imagePath;
 
     // Trim = INPUT options on the audio input (verified: -ss 2 -to 5 -> 3.000s).
@@ -680,8 +718,11 @@ void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString 
     connect(m_process, &QProcess::readyReadStandardOutput,
             this, &FFmpegRunner::parseEncodeProgress, Qt::UniqueConnection);
 
+    qDebug().noquote() << "[ffmpeg] radio-video cmd:" << args
+                       << (forceSoftware ? "(software fallback)" : "");
     emit progress(0, 100, m_progressLabel);
     m_process->start("ffmpeg", args);
+    qDebug() << "[ffmpeg] radio-video started; watchdog 20s";
     // Arm the watchdog: if the chosen encoder (typically a HW one) produces no
     // output frame within the window, treat it as deadlocked and fall back.
     m_watchdog->start(20000);
@@ -702,7 +743,10 @@ void FFmpegRunner::burnSubtitlesImpl(const QString &videoPath, const QString &as
     m_singleShot = true;
     m_finished = false;
     m_progressStdoutBuf.clear();
+    m_stderrBuf.clear();
+    m_lastLoggedPct = -1;
     m_forceSoftware = forceSoftware;
+    m_usedHw = false;
     m_gotProgress = false;
     m_retrying = false;
     m_successMessage = tr("Subtitles burned successfully.");
@@ -735,13 +779,16 @@ void FFmpegRunner::burnSubtitlesImpl(const QString &videoPath, const QString &as
     // encoder is surfaced in the status line.
     const QString baseFilter = QStringLiteral("ass=") + escapeFilterPath(tempAss);
     const VideoEncodePlan plan = buildVideoEncodePlan(baseFilter, crf, false /*stillImage*/, forceSoftware);
+    m_usedHw = (plan.label == QLatin1String("NVENC") ||
+                plan.label == QLatin1String("QuickSync") ||
+                plan.label == QLatin1String("VAAPI"));
     m_progressLabel = tr("Burning subtitles...") + QStringLiteral(" [%1]").arg(plan.label);
 
     // Verified command:
     //   ffmpeg -y [<vaapi_device>] -i <video> -vf ass=<escaped ass>[,format=...,hwupload]
     //          <encoder args> -r <fps> -c:a copy -progress pipe:1 <out>
     QStringList args;
-    args << "-y" << plan.globalArgs
+    args << "-y" << "-hide_banner" << "-nostats" << plan.globalArgs
          << "-i" << videoPath
          << "-vf" << plan.filter
          << plan.args;
@@ -755,8 +802,11 @@ void FFmpegRunner::burnSubtitlesImpl(const QString &videoPath, const QString &as
     connect(m_process, &QProcess::readyReadStandardOutput,
             this, &FFmpegRunner::parseEncodeProgress, Qt::UniqueConnection);
 
+    qDebug().noquote() << "[ffmpeg] burn-subtitles cmd:" << args
+                       << (forceSoftware ? "(software fallback)" : "");
     emit progress(0, 100, m_progressLabel);
     m_process->start("ffmpeg", args);
+    qDebug() << "[ffmpeg] burn-subtitles started; watchdog 20s";
     // Arm the watchdog: if the chosen encoder (typically a HW one) produces no
     // output frame within the window, treat it as deadlocked and fall back.
     m_watchdog->start(20000);
@@ -792,6 +842,15 @@ void FFmpegRunner::parseEncodeProgress() {
     }
 
     if (m_progressTotal <= 0.0) return;
-    emit progress(qBound(0, static_cast<int>(cur / m_progressTotal * 100.0), 99), 100,
-                  m_progressLabel);
+    const int pct = qBound(0, static_cast<int>(cur / m_progressTotal * 100.0), 99);
+    emit progress(pct, 100, m_progressLabel);
+    // Throttled console trace: one line per whole-percent change. On a healthy
+    // encode this proves frames are flowing; on a hung one it stays silent (the
+    // absence is itself the diagnostic - "started" then nothing).
+    if (pct != m_lastLoggedPct) {
+        m_lastLoggedPct = pct;
+        qDebug().noquote() << "[ffmpeg] progress" << pct << "% ("
+                           << QString::number(cur, 'f', 1) << "s /"
+                           << QString::number(m_progressTotal, 'f', 1) << "s )";
+    }
 }

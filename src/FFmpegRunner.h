@@ -49,6 +49,12 @@ private slots:
     void onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onProcessError(QProcess::ProcessError error);
     void onWatchdogTimeout();
+    // Drains ffmpeg's stderr as it arrives: accumulates it for
+    // summarizeFfmpegError() on failure, and (for single-shot encodes) echoes
+    // each chunk to the console so we can see where ffmpeg is when it stalls -
+    // the UI shows only parsed progress, so without this a hung ffmpeg is a
+    // silent 0% with no clue why.
+    void onFfmpegStderr();
 
 private:
     void runNextStep();
@@ -92,6 +98,8 @@ private:
     QString m_successMessage;       // emitted on success
     QString m_progressLabel;       // status text shown during progress
     QByteArray m_progressStdoutBuf; // unprocessed tail of -progress stdout
+    QByteArray m_stderrBuf;         // ffmpeg's stderr, drained live (for errors + diagnostics)
+    int m_lastLoggedPct = -1;       // last progress % written to console (throttle)
 
     // Startup watchdog for single-shot encodes (radio video / subtitle burn).
     // A hardware encoder that passed the synthetic probe can still deadlock on
@@ -101,6 +109,7 @@ private:
     // next export doesn't re-trigger the hang.
     QTimer *m_watchdog;
     bool m_forceSoftware = false;  // current attempt bypasses HW selection
+    bool m_usedHw = false;        // current attempt actually uses a HW encoder
     bool m_gotProgress = false;    // a real out_time_us has been seen
     bool m_retrying = false;       // watchdog killed the HW run; retry pending
     std::function<void()> m_retryWithSoftware; // replays the encode on libx264
