@@ -1,6 +1,8 @@
 #pragma once
 #include <QObject>
 #include <QString>
+#include <QTimer>
+#include <functional>
 #include <vector>
 #include <QProcess>
 #include <QTemporaryDir>
@@ -44,6 +46,7 @@ signals:
 private slots:
     void onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void onProcessError(QProcess::ProcessError error);
+    void onWatchdogTimeout();
 
 private:
     void runNextStep();
@@ -59,6 +62,15 @@ private:
     // summarizeFfmpegError() on failure — no accumulation or drain-ordering
     // hazard.
     void parseEncodeProgress();
+    // Implementation behind createRadioVideo()/burnSubtitles(): does the real
+    // work. forceSoftware bypasses hardware-encoder selection (used by the
+    // startup watchdog when a HW encoder that passed its probe deadlocks on
+    // the real encode, since libx264 always works).
+    void createRadioVideoImpl(const QString &imagePath, const QString &audioPath,
+                              double startSec, double endSec, const QString &framing,
+                              const QString &outputPath, bool forceSoftware);
+    void burnSubtitlesImpl(const QString &videoPath, const QString &assPath,
+                           const QString &outputPath, int fps, int crf, bool forceSoftware);
 
     QString m_input;
     std::vector<Segment> m_segments;
@@ -78,4 +90,16 @@ private:
     QString m_successMessage;       // emitted on success
     QString m_progressLabel;       // status text shown during progress
     QByteArray m_progressStdoutBuf; // unprocessed tail of -progress stdout
+
+    // Startup watchdog for single-shot encodes (radio video / subtitle burn).
+    // A hardware encoder that passed the synthetic probe can still deadlock on
+    // the real encode (observed: AMF on AMD 780M shows no progress, no CPU/GPU
+    // use). If no output frame arrives within the window, we kill the run and
+    // retry once on libx264, then disable HW for the rest of the session so the
+    // next export doesn't re-trigger the hang.
+    QTimer *m_watchdog;
+    bool m_forceSoftware = false;  // current attempt bypasses HW selection
+    bool m_gotProgress = false;    // a real out_time_us has been seen
+    bool m_retrying = false;       // watchdog killed the HW run; retry pending
+    std::function<void()> m_retryWithSoftware; // replays the encode on libx264
 };

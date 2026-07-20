@@ -10,7 +10,7 @@ A high-performance, native desktop application for lossless video and audio clip
 
 - **Native Performance**: Powered by `libmpv` with full hardware acceleration via OpenGL rendering.
 - **Lossless Export**: High-speed clipping without quality loss using FFmpeg's stream copy.
-- **Radio Video & Subtitle Burn**: Turn a cover image + audio into a video, or hardcode `.ass` subtitles into a video. Encoding automatically uses GPU hardware acceleration (NVENC / QuickSync / AMF / VAAPI) when a usable encoder is detected, and falls back to libx264 (`-preset veryfast`, all CPU cores) otherwise. The active encoder is shown in the progress line.
+- **Radio Video & Subtitle Burn**: Turn a cover image + audio into a video, or hardcode `.ass` subtitles into a video. Encoding automatically uses GPU hardware acceleration (NVENC / QuickSync / AMF / VAAPI) when a usable encoder is detected, and falls back to libx264 (`-preset veryfast`, all CPU cores) otherwise. The active encoder is shown in the progress line. If a detected hardware encoder passes its probe but then stalls on the real encode (e.g. some AMF/driver combinations sit at 0% with no CPU/GPU use), it is automatically abandoned and retried on libx264, so an export never hangs forever.
 - **Flexible Workflow**: Supports reordering segments and exporting them individually or merged.
 - **Modern UI**: Clean dark-themed interface built with Qt Widgets.
 - **Multilingual Support**: Built-in English and Simplified Chinese (switchable at runtime).

@@ -118,6 +118,13 @@ static bool encoderWorks(const QStringList &args) {
     return p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0;
 }
 
+// Set when a hardware encoder passed the synthetic probe but then deadlocked
+// on the real encode (the startup watchdog fired). Once set, skip hardware for
+// the rest of the session so subsequent exports go straight to the reliable
+// libx264 path instead of re-triggering the same hang each time. The flag is
+// process-local (resets on app restart), so a driver update fixes things.
+static bool g_hwEncoderBad = false;
+
 // Best usable hardware H.264 encoder, probed once and cached. Priority:
 // nvenc (NVIDIA) > qsv (Intel) > amf (AMD, mostly Windows) > vaapi (Linux
 // Intel/AMD). Each candidate is actually exercised (not just listed) before it
@@ -125,6 +132,8 @@ static bool encoderWorks(const QStringList &args) {
 // An empty `name` means "no working hardware encoder - use the software path".
 struct HwEncoder { QString name; QString vaapiDevice; };
 static HwEncoder detectHwEncoder() {
+    // A HW encoder already proved unreliable this session: skip it entirely.
+    if (g_hwEncoderBad) return HwEncoder{};
     static const HwEncoder cached = []() {
         HwEncoder r;
         // NVENC (NVIDIA): accepts software frames directly (uploads internally).
@@ -191,9 +200,9 @@ struct VideoEncodePlan {
     QString filter;         // complete -vf value
     QStringList args;       // -c:v ... + quality/preset/thread/pix_fmt flags
 };
-static VideoEncodePlan buildVideoEncodePlan(const QString &baseFilter, int crf, bool stillImage) {
+static VideoEncodePlan buildVideoEncodePlan(const QString &baseFilter, int crf, bool stillImage, bool forceSoftware) {
     VideoEncodePlan p;
-    const HwEncoder hw = detectHwEncoder();
+    const HwEncoder hw = forceSoftware ? HwEncoder{} : detectHwEncoder();
     const QString q = QString::number(qBound(1, crf, 51));
 
     if (hw.name == QLatin1String("h264_nvenc")) {
@@ -253,9 +262,12 @@ static QString escapeFilterPath(const QString &path) {
     return QStringLiteral("'") + p + QStringLiteral("'");   // group at level 1
 }
 
-FFmpegRunner::FFmpegRunner(QObject *parent) : QObject(parent), m_process(new QProcess(this)) {
+FFmpegRunner::FFmpegRunner(QObject *parent)
+    : QObject(parent), m_process(new QProcess(this)), m_watchdog(new QTimer(this)) {
     connect(m_process, &QProcess::finished, this, &FFmpegRunner::onProcessFinished);
     connect(m_process, &QProcess::errorOccurred, this, &FFmpegRunner::onProcessError);
+    m_watchdog->setSingleShot(true);
+    connect(m_watchdog, &QTimer::timeout, this, &FFmpegRunner::onWatchdogTimeout);
 }
 
 void FFmpegRunner::cutAndMerge(const QString &input, const std::vector<Segment> &segments, const QString &output, bool mergeAfterCut, bool hasVideo) {
@@ -446,6 +458,26 @@ void FFmpegRunner::finalizeIndividualExport() {
 }
 
 void FFmpegRunner::onProcessFinished(int exitCode, QProcess::ExitStatus exitStatus) {
+    m_watchdog->stop();
+
+    if (m_retrying) {
+        // The watchdog killed a hung hardware-encoder run. Retry once on the
+        // always-reliable libx264 path. Defer via the event loop so the
+        // QProcess fully settles (its paired errorOccurred() has drained)
+        // before we restart it. m_retrying stays true until the deferred call
+        // runs, which also suppresses that paired errorOccurred() signal.
+        QMetaObject::invokeMethod(this, [this]() {
+            m_retrying = false;
+            if (m_finished) return;  // cancelled while the retry was deferred
+            if (m_retryWithSoftware) {
+                m_retryWithSoftware();
+            } else {
+                emitFinished(false, tr("Encoding stalled and no software fallback is available."));
+            }
+        }, Qt::QueuedConnection);
+        return;
+    }
+
     if (m_singleShot) {
         // Single-shot encode (radio video or subtitle burn): no step-loop.
         // Reset the flag so a late finished()/errorOccurred() pair (e.g. after
@@ -474,6 +506,8 @@ void FFmpegRunner::onProcessFinished(int exitCode, QProcess::ExitStatus exitStat
 }
 
 void FFmpegRunner::onProcessError(QProcess::ProcessError error) {
+    if (m_retrying) return;  // watchdog-driven kill: onProcessFinished handles the retry
+    m_watchdog->stop();
     // QProcess emits both errorOccurred() and finished() when a process dies
     // from a signal (a genuine crash, or our own cancel()/kill()); emitFinished()
     // guarantees we notify the caller only once, regardless of which handler
@@ -506,6 +540,8 @@ void FFmpegRunner::onProcessError(QProcess::ProcessError error) {
 
 void FFmpegRunner::cancel() {
     if (m_finished) return;
+    m_watchdog->stop();
+    m_retrying = false;  // don't auto-retry after a user-initiated cancel
     if (m_process->state() == QProcess::NotRunning) {
         // Between steps: nothing to kill, just report.
         emitFinished(false, "Export cancelled by user");
@@ -523,13 +559,51 @@ void FFmpegRunner::emitFinished(bool success, const QString &message) {
     emit finished(success, message);
 }
 
+void FFmpegRunner::onWatchdogTimeout() {
+    // Only single-shot encodes arm the watchdog. If real progress arrived since
+    // it started, the encode is healthy and the timer fired late - nothing to do.
+    if (m_gotProgress) return;
+    m_watchdog->stop();
+
+    if (!m_forceSoftware) {
+        // A hardware encoder passed its synthetic probe but produced no output on
+        // the real encode - it is deadlocked (observed with AMF on AMD 780M: 0%
+        // progress, no CPU/GPU use). Disable HW for the rest of the session so
+        // the next export skips it, then retry THIS encode on libx264, which
+        // always works. Killing triggers errorOccurred() (suppressed by
+        // m_retrying) + finished() (which defers the software retry).
+        g_hwEncoderBad = true;
+        m_retrying = true;
+        m_process->kill();
+        return;
+    }
+    // Already on the software path and still no progress - genuinely stuck.
+    // Kill and let the normal failure path report it (extremely unlikely with
+    // libx264, but never hang the UI forever).
+    m_process->kill();
+}
+
 void FFmpegRunner::createRadioVideo(const QString &imagePath, const QString &audioPath,
                                     double startSec, double endSec, const QString &framing,
                                     const QString &outputPath) {
-    // Reset state for this (possibly reused) runner.
+    // Remember how to replay this exact encode on the software path, in case
+    // the startup watchdog detects a hung hardware encoder and needs to retry.
+    m_retryWithSoftware = [this, imagePath, audioPath, startSec, endSec, framing, outputPath]() {
+        createRadioVideoImpl(imagePath, audioPath, startSec, endSec, framing, outputPath, true);
+    };
+    createRadioVideoImpl(imagePath, audioPath, startSec, endSec, framing, outputPath, false);
+}
+
+void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString &audioPath,
+                                        double startSec, double endSec, const QString &framing,
+                                        const QString &outputPath, bool forceSoftware) {
+    // Reset state for this (possibly reused) runner / attempt.
     m_singleShot = true;
     m_finished = false;
     m_progressStdoutBuf.clear();
+    m_forceSoftware = forceSoftware;
+    m_gotProgress = false;
+    m_retrying = false;
     m_successMessage = tr("Radio video created successfully.");
     m_progressLabel = tr("Creating radio video...");
 
@@ -563,7 +637,7 @@ void FFmpegRunner::createRadioVideo(const QString &imagePath, const QString &aud
     // tiny regardless of preset, so libx264's -preset veryfast trades a little
     // size for a big speedup. Reflect the chosen encoder in the status line so
     // the user can see HW acceleration is active.
-    const VideoEncodePlan plan = buildVideoEncodePlan(vf, 23, true /*stillImage*/);
+    const VideoEncodePlan plan = buildVideoEncodePlan(vf, 23, true /*stillImage*/, forceSoftware);
     m_progressLabel = tr("Creating radio video...") + QStringLiteral(" [%1]").arg(plan.label);
 
     // Verified command:
@@ -615,13 +689,29 @@ void FFmpegRunner::createRadioVideo(const QString &imagePath, const QString &aud
 
     emit progress(0, 100, m_progressLabel);
     m_process->start("ffmpeg", args);
+    // Arm the watchdog: if the chosen encoder (typically a HW one) produces no
+    // output frame within the window, treat it as deadlocked and fall back.
+    m_watchdog->start(20000);
 }
 
 void FFmpegRunner::burnSubtitles(const QString &videoPath, const QString &assPath,
                                  const QString &outputPath, int fps, int crf) {
+    // Remember how to replay this exact encode on the software path, in case
+    // the startup watchdog detects a hung hardware encoder and needs to retry.
+    m_retryWithSoftware = [this, videoPath, assPath, outputPath, fps, crf]() {
+        burnSubtitlesImpl(videoPath, assPath, outputPath, fps, crf, true);
+    };
+    burnSubtitlesImpl(videoPath, assPath, outputPath, fps, crf, false);
+}
+
+void FFmpegRunner::burnSubtitlesImpl(const QString &videoPath, const QString &assPath,
+                                     const QString &outputPath, int fps, int crf, bool forceSoftware) {
     m_singleShot = true;
     m_finished = false;
     m_progressStdoutBuf.clear();
+    m_forceSoftware = forceSoftware;
+    m_gotProgress = false;
+    m_retrying = false;
     m_successMessage = tr("Subtitles burned successfully.");
     m_progressLabel = tr("Burning subtitles...");
 
@@ -651,7 +741,7 @@ void FFmpegRunner::burnSubtitles(const QString &videoPath, const QString &assPat
     // crf (18 = visually lossless) is also the hardware QP target. The chosen
     // encoder is surfaced in the status line.
     const QString baseFilter = QStringLiteral("ass=") + escapeFilterPath(tempAss);
-    const VideoEncodePlan plan = buildVideoEncodePlan(baseFilter, crf, false /*stillImage*/);
+    const VideoEncodePlan plan = buildVideoEncodePlan(baseFilter, crf, false /*stillImage*/, forceSoftware);
     m_progressLabel = tr("Burning subtitles...") + QStringLiteral(" [%1]").arg(plan.label);
 
     // Verified command:
@@ -674,6 +764,9 @@ void FFmpegRunner::burnSubtitles(const QString &videoPath, const QString &assPat
 
     emit progress(0, 100, m_progressLabel);
     m_process->start("ffmpeg", args);
+    // Arm the watchdog: if the chosen encoder (typically a HW one) produces no
+    // output frame within the window, treat it as deadlocked and fall back.
+    m_watchdog->start(20000);
 }
 
 void FFmpegRunner::parseEncodeProgress() {
@@ -694,6 +787,11 @@ void FFmpegRunner::parseEncodeProgress() {
     double cur = -1.0;
     while (it.hasNext()) cur = it.next().captured(1).toLongLong() / 1000000.0;
     if (cur < 0.0) return;
+    // A non-negative out_time_us means the encoder actually produced a frame:
+    // it is not hung. Latch this and disarm the startup watchdog so it can't
+    // fire a false fallback after a legitimately slow first frame.
+    m_gotProgress = true;
+    m_watchdog->stop();
 
     if (m_progressTotal <= 0.0) return;
     emit progress(qBound(0, static_cast<int>(cur / m_progressTotal * 100.0), 99), 100,
