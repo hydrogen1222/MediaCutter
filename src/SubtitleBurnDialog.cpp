@@ -236,7 +236,10 @@ void SubtitleBurnDialog::doBurn() {
     connect(m_runner, &FFmpegRunner::progress, this, &SubtitleBurnDialog::onRunnerProgress);
     connect(m_runner, &FFmpegRunner::finished, this, &SubtitleBurnDialog::onRunnerFinished);
 
-    m_runner->burnSubtitles(m_videoPath, m_subPath, output, m_fpsBox->value(), 18);
+    // Pass mpv's known video duration as the progress denominator (avoids a
+    // redundant ffmpeg probe; consistent with the radio-video path).
+    m_runner->burnSubtitles(m_videoPath, m_subPath, output, m_fpsBox->value(), 18,
+                            m_player->getDuration());
 }
 
 void SubtitleBurnDialog::onRunnerProgress(int cur, int total, const QString &status) {

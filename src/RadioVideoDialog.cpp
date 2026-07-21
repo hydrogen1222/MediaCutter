@@ -319,8 +319,12 @@ void RadioVideoDialog::doExport() {
     connect(m_runner, &FFmpegRunner::finished, this, &RadioVideoDialog::onRunnerFinished);
 
     const double endSec = (m_markOut < 0) ? -1.0 : m_markOut;
+    // Pass mpv's known audio duration so FFmpegRunner can cap the output with
+    // -t and show real progress, instead of re-probing (which fails for ASF/WMA
+    // radio rips that report "Duration: N/A" - the blind-0% bug).
     m_runner->createRadioVideo(m_imagePath, m_audioPath, m_markIn, endSec,
-                               m_framingCombo->currentData().toString(), output);
+                               m_framingCombo->currentData().toString(), output,
+                               m_player->getDuration());
 }
 
 void RadioVideoDialog::onRunnerProgress(int cur, int total, const QString &status) {

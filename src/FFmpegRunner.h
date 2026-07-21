@@ -2,6 +2,7 @@
 #include <QObject>
 #include <QString>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <functional>
 #include <vector>
 #include <QProcess>
@@ -22,9 +23,15 @@ public:
     // trimmed [startSec,endSec]) audio length and re-encoded. framing is one
     // of: "Native", "1080x1080", "1920x1080", "1280x720". Emits
     // progress(percent,100,...) during the encode and finished() when done.
+    // audioDurationHint: the audio length in seconds if the caller already
+    // knows it (mpv decoded the file and reported it). Used as the progress
+    // denominator and to cap the output with -t. When 0 (unknown) it is
+    // re-probed via `ffmpeg -i`; if that also fails - some ASF/WMA radio rips
+    // report "Duration: N/A" - the encode falls back to -shortest and no
+    // progress % is shown (the blind-0% bug). Prefer passing the hint.
     void createRadioVideo(const QString &imagePath, const QString &audioPath,
                           double startSec, double endSec, const QString &framing,
-                          const QString &outputPath);
+                          const QString &outputPath, double audioDurationHint = 0.0);
 
     // Burn (hardcode) an .ass subtitle track into a video by re-encoding the
     // video stream with a libass overlay (the "burn hard subtitles" feature).
@@ -35,11 +42,15 @@ public:
     // the QP target when a hardware encoder is used. The encoder is chosen
     // automatically: a working hardware encoder (NVENC/QuickSync/VAAPI) if one is
     // usable, otherwise libx264 (-preset veryfast, all CPU cores) or the mpeg4
-    // fallback. (AMF is intentionally skipped - see detectHwEncoder.) A startup
-    // watchdog also retries on libx264 if the chosen encoder stalls on the real
-    // encode. Emits progress + finished like above.
+    // fallback. (AMF is intentionally skipped - see detectHwEncoder.) A
+    // sliding-window watchdog also retries on libx264 if a hardware encoder
+    // stalls mid-encode, and reports failure if a software encode stalls - see
+    // onWatchdogTimeout. Emits progress + finished like above.
+    // videoDurationHint: the input video's length in seconds if the caller
+    // already knows it (mpv). Used as the progress denominator. 0 => re-probe.
     void burnSubtitles(const QString &videoPath, const QString &assPath,
-                       const QString &outputPath, int fps, int crf);
+                       const QString &outputPath, int fps, int crf,
+                       double videoDurationHint = 0.0);
 
 signals:
     void progress(int current, int total, const QString &status);
@@ -72,13 +83,16 @@ private:
     void parseEncodeProgress();
     // Implementation behind createRadioVideo()/burnSubtitles(): does the real
     // work. forceSoftware bypasses hardware-encoder selection (used by the
-    // startup watchdog when a HW encoder that passed its probe deadlocks on
-    // the real encode, since libx264 always works).
+    // watchdog when a HW encoder that passed its probe deadlocks on the real
+    // encode, since libx264 always works). durationHint is the caller-known
+    // media length (audio for radio, video for burn); 0 => re-probe.
     void createRadioVideoImpl(const QString &imagePath, const QString &audioPath,
                               double startSec, double endSec, const QString &framing,
-                              const QString &outputPath, bool forceSoftware);
+                              const QString &outputPath, bool forceSoftware,
+                              double audioDurationHint);
     void burnSubtitlesImpl(const QString &videoPath, const QString &assPath,
-                           const QString &outputPath, int fps, int crf, bool forceSoftware);
+                           const QString &outputPath, int fps, int crf, bool forceSoftware,
+                           double videoDurationHint);
 
     QString m_input;
     std::vector<Segment> m_segments;
@@ -101,16 +115,25 @@ private:
     QByteArray m_stderrBuf;         // ffmpeg's stderr, drained live (for errors + diagnostics)
     int m_lastLoggedPct = -1;       // last progress % written to console (throttle)
 
-    // Startup watchdog for single-shot encodes (radio video / subtitle burn).
-    // A hardware encoder that passed the synthetic probe can still deadlock on
-    // the real encode (observed: AMF on AMD 780M shows no progress, no CPU/GPU
-    // use). If no output frame arrives within the window, we kill the run and
-    // retry once on libx264, then disable HW for the rest of the session so the
-    // next export doesn't re-trigger the hang.
+    // Sliding-window stall watchdog for single-shot encodes (radio video /
+    // subtitle burn). m_watchdog is a RECURRING timer (WATCHDOG_POLL_MS); each
+    // tick checks m_lastProgressAt. The latter is reset whenever out_time_us
+    // strictly advances (parseEncodeProgress), so a healthy encode - which keeps
+    // emitting advancing frames - never trips it. If no frame advances for
+    // WATCHDOG_STALL_MS at ANY point (a first-frame deadlock OR a mid-encode
+    // hang), we kill the run: retry once on libx264 if a HW encoder was in use
+    // (and disable HW for the rest of the session), else report failure. The
+    // old single-shot watchdog disarmed on the first frame, so a hang that
+    // started after frame 1 was invisible - this closes that gap. m_lastOutTimeSec
+    // makes the "strictly advances" check exact, so an encoder that stays alive
+    // spamming the SAME out_time_us (the AMF 0-time symptom) still trips it.
     QTimer *m_watchdog;
+    QElapsedTimer m_lastProgressAt; // reset on each advancing frame; stall = expired
+    double m_lastOutTimeSec = -1.0; // last advancing out_time_us/1e6 (-1 = none yet)
     bool m_forceSoftware = false;  // current attempt bypasses HW selection
     bool m_usedHw = false;        // current attempt actually uses a HW encoder
-    bool m_gotProgress = false;    // a real out_time_us has been seen
+    bool m_gotProgress = false;    // a real out_time_us has been seen (diagnostics)
     bool m_retrying = false;       // watchdog killed the HW run; retry pending
+    bool m_watchdogKilled = false; // watchdog killed this run; suppress the "crashed" emit
     std::function<void()> m_retryWithSoftware; // replays the encode on libx264
 };

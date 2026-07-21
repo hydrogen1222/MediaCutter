@@ -7,12 +7,20 @@
 #include <QRegularExpression>
 #include <QStringList>
 
+// Sliding-window stall watchdog cadence (see FFmpegRunner.h). The timer ticks
+// every WATCHDOG_POLL_MS; if out_time_us hasn't advanced for WATCHDOG_STALL_MS,
+// the encode is treated as deadlocked. 20s is generous: a healthy single-shot
+// encode (static image at 5fps, or a subtitle burn) advances far faster than
+// realtime, so 20s of frozen out_time_us is a real stall, not a slow frame.
+static constexpr int WATCHDOG_POLL_MS = 2000;
+static constexpr int WATCHDOG_STALL_MS = 20000;
+
 // FFmpeg prints its full banner, build configuration, and per-frame progress
 // to stderr even on a normal failure, so dumping readAllStandardError() into a
 // message box gives the user hundreds of unreadable lines. Pull out only the
 // lines that actually explain the failure.
 static QString summarizeFfmpegError(const QByteArray &rawStderr) {
-    const QString text = QString::fromLocal8Bit(rawStderr).trimmed();
+    const QString text = QString::fromUtf8(rawStderr).trimmed();
     if (text.isEmpty()) return QStringLiteral("FFmpeg process failed (no error output).");
     const QStringList lines = text.split('\n');
 
@@ -87,7 +95,7 @@ static double probeMediaDuration(const QString &path) {
     QProcess probe;
     probe.start("ffmpeg", QStringList() << "-hide_banner" << "-i" << path);
     if (!probe.waitForFinished(3000)) return 0.0;
-    const QString out = QString::fromLocal8Bit(probe.readAllStandardError());
+    const QString out = QString::fromUtf8(probe.readAllStandardError());
     QRegularExpression re(QStringLiteral("Duration:\\s*(\\d+):(\\d+):(\\d+(?:\\.\\d+)?)"));
     QRegularExpressionMatch m = re.match(out);
     if (!m.hasMatch()) return 0.0;
@@ -262,7 +270,11 @@ FFmpegRunner::FFmpegRunner(QObject *parent)
     // Keep ffmpeg's stderr drained into m_stderrBuf at all times (a full OS
     // pipe could otherwise block ffmpeg) and surface it for diagnostics.
     connect(m_process, &QProcess::readyReadStandardError, this, &FFmpegRunner::onFfmpegStderr);
-    m_watchdog->setSingleShot(true);
+    // Recurring stall watchdog: ticks every WATCHDOG_POLL_MS while a single-shot
+    // encode runs, and acts only when out_time_us hasn't advanced for
+    // WATCHDOG_STALL_MS (see onWatchdogTimeout). Not single-shot - a mid-encode
+    // hang must be caught, not just a first-frame one.
+    m_watchdog->setSingleShot(false);
     connect(m_watchdog, &QTimer::timeout, this, &FFmpegRunner::onWatchdogTimeout);
 }
 
@@ -510,8 +522,12 @@ void FFmpegRunner::onProcessFinished(int exitCode, QProcess::ExitStatus exitStat
 }
 
 void FFmpegRunner::onProcessError(QProcess::ProcessError error) {
-    qDebug().noquote() << "[ffmpeg] errorOccurred=" << error << "retrying=" << m_retrying;
-    if (m_retrying) return;  // watchdog-driven kill: onProcessFinished handles the retry
+    qDebug().noquote() << "[ffmpeg] errorOccurred=" << error
+                       << "retrying=" << m_retrying
+                       << "watchdogKilled=" << m_watchdogKilled;
+    if (m_retrying) return;  // watchdog-driven HW kill: onProcessFinished handles the retry
+    if (m_watchdogKilled) return;  // watchdog-driven kill (HW retry or SW stall):
+                                   // onProcessFinished emits the ffmpeg stderr summary
     m_watchdog->stop();
     // QProcess emits both errorOccurred() and finished() when a process dies
     // from a signal (a genuine crash, or our own cancel()/kill()); emitFinished()
@@ -575,23 +591,35 @@ void FFmpegRunner::onFfmpegStderr() {
     // (stream copy, fast, never reported to hang) is kept quiet to avoid
     // flooding the console with per-frame stats.
     if (m_singleShot) {
-        qDebug().noquote() << "[ffmpeg]" << QString::fromLocal8Bit(chunk).trimmed();
+        qDebug().noquote() << "[ffmpeg]" << QString::fromUtf8(chunk).trimmed();
     }
 }
 
 void FFmpegRunner::onWatchdogTimeout() {
-    // Only single-shot encodes arm the watchdog. If real progress arrived since
-    // it started, the encode is healthy and the timer fired late - nothing to do.
-    if (m_gotProgress) return;
+    // Recurring tick of the sliding-window stall detector. m_lastProgressAt is
+    // reset whenever out_time_us strictly advances (parseEncodeProgress); if it
+    // hasn't been reset for WATCHDOG_STALL_MS, no frame has advanced in that
+    // window - a genuine stall (first-frame deadlock OR mid-encode hang). The
+    // old single-shot watchdog disarmed on the first frame and could not catch
+    // a hang that started later; this tick model closes that gap.
+    if (m_finished) return;
+    if (!m_lastProgressAt.hasExpired(WATCHDOG_STALL_MS)) return;  // healthy - keep ticking
+
     m_watchdog->stop();
-    qDebug().noquote() << "[ffmpeg] WATCHDOG fired - no output frame in 20s."
+    // Mark the kill as ours so onProcessError() doesn't surface the generic
+    // "crashed" message and drown out the real ffmpeg stderr summary that
+    // onProcessFinished() emits.
+    m_watchdogKilled = true;
+    qDebug().noquote() << "[ffmpeg] WATCHDOG fired - no advancing frame in"
+                       << (WATCHDOG_STALL_MS / 1000) << "s."
                        << "forceSoftware=" << m_forceSoftware
-                       << "stderrSoFar:\n" << QString::fromLocal8Bit(m_stderrBuf).trimmed();
+                       << "usedHw=" << m_usedHw
+                       << "gotProgress=" << m_gotProgress
+                       << "stderrSoFar:\n" << QString::fromUtf8(m_stderrBuf).trimmed();
 
     if (!m_forceSoftware && m_usedHw) {
-        // A hardware encoder passed its synthetic probe but produced no output on
-        // the real encode - it is deadlocked (observed with AMF on AMD 780M: 0%
-        // progress, no CPU/GPU use). Disable HW for the rest of the session so
+        // A hardware encoder passed its synthetic probe but stalled on the real
+        // encode (no advancing frame). Disable HW for the rest of the session so
         // the next export skips it, then retry THIS encode on libx264, which
         // always works. Killing triggers errorOccurred() (suppressed by
         // m_retrying) + finished() (which defers the software retry).
@@ -602,26 +630,27 @@ void FFmpegRunner::onWatchdogTimeout() {
         return;
     }
     // Already on the software path (no HW was available, or the HW retry also
-    // stalled) and still no progress - genuinely stuck. Kill and let the normal
-    // failure path report it. Retrying libx264-with-libx264 would be pointless.
-    qDebug() << "[ffmpeg] watchdog: software encode stalled - no fallback available";
+    // stalled) and still no advancing frame - genuinely stuck. Kill and let the
+    // normal failure path report it. Retrying libx264-with-libx264 is pointless.
+    qDebug() << "[ffmpeg] watchdog: encode stalled - no fallback available";
     m_process->kill();
 }
 
 void FFmpegRunner::createRadioVideo(const QString &imagePath, const QString &audioPath,
                                     double startSec, double endSec, const QString &framing,
-                                    const QString &outputPath) {
+                                    const QString &outputPath, double audioDurationHint) {
     // Remember how to replay this exact encode on the software path, in case
-    // the startup watchdog detects a hung hardware encoder and needs to retry.
-    m_retryWithSoftware = [this, imagePath, audioPath, startSec, endSec, framing, outputPath]() {
-        createRadioVideoImpl(imagePath, audioPath, startSec, endSec, framing, outputPath, true);
+    // the watchdog detects a hung hardware encoder and needs to retry.
+    m_retryWithSoftware = [this, imagePath, audioPath, startSec, endSec, framing, outputPath, audioDurationHint]() {
+        createRadioVideoImpl(imagePath, audioPath, startSec, endSec, framing, outputPath, true, audioDurationHint);
     };
-    createRadioVideoImpl(imagePath, audioPath, startSec, endSec, framing, outputPath, false);
+    createRadioVideoImpl(imagePath, audioPath, startSec, endSec, framing, outputPath, false, audioDurationHint);
 }
 
 void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString &audioPath,
                                         double startSec, double endSec, const QString &framing,
-                                        const QString &outputPath, bool forceSoftware) {
+                                        const QString &outputPath, bool forceSoftware,
+                                        double audioDurationHint) {
     // Reset state for this (possibly reused) runner / attempt.
     m_singleShot = true;
     m_finished = false;
@@ -632,11 +661,22 @@ void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString 
     m_usedHw = false;
     m_gotProgress = false;
     m_retrying = false;
+    m_watchdogKilled = false;
+    m_lastOutTimeSec = -1.0;
     m_successMessage = tr("Radio video created successfully.");
     m_progressLabel = tr("Creating radio video...");
 
     startSec = qMax(0.0, startSec);
-    const double audioDuration = probeMediaDuration(audioPath);
+    // Prefer the duration the caller already knows (mpv decoded the file and
+    // reported it - authoritative). Fall back to probing only when the caller
+    // didn't pass one. This matters for ASF/WMA radio rips whose container
+    // header has no clean duration: ffmpeg prints "Duration: N/A", the probe
+    // regex returns 0, and the old code then used -shortest + m_progressTotal=0
+    // -> the UI sat at 0% forever with no progress (the blind-0% bug). With
+    // mpv's value we use -t and get a real progress denominator.
+    const double audioDuration = (audioDurationHint > 0.0)
+        ? audioDurationHint
+        : probeMediaDuration(audioPath);
     if (endSec < 0.0) {
         endSec = audioDuration;             // whole file
     } else if (audioDuration > 0.0 && endSec > audioDuration) {
@@ -674,8 +714,8 @@ void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString 
     // Verified command:
     //   ffmpeg -y [<vaapi_device>] -loop 1 -framerate 5 -i <image>
     //          [-ss <s> -to <e>] -i <audio> -vf <vf> <encoder args>
-    //          -g 5 -keyint_min 5 -r 5 -c:a aac -b:a 192k
-    //          -t <dur> -progress pipe:1 <out>
+    //          -g 5 -keyint_min 5 -r 5 -af aresample=async=1:first_pts=0
+    //          -c:a aac -b:a 192k -t <dur> -progress pipe:1 <out>
     QStringList args;
     args << "-y" << "-hide_banner" << "-nostats" << plan.globalArgs
          << "-loop" << "1" << "-framerate" << "5" << "-i" << imagePath;
@@ -698,7 +738,16 @@ void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString 
     args << "-g" << "5" << "-keyint_min" << "5";
     // Low fps (5) for a static image: visually identical to 25fps but far
     // smaller files — important for multi-hour radio episodes.
-    args << "-r" << "5" << "-c:a" << "aac" << "-b:a" << "192k";
+    // Resync the audio to a clean, monotonically increasing timeline starting
+    // at 0. ASF/WMA radio rips can carry non-monotonic audio timestamps that
+    // make the AAC encoder warn "Queue input is backward in time" /
+    // "Non-monotonic DTS" and, with -shortest, stall the encode at 0% CPU.
+    // async=1 drops/inserts samples to kill timestamp drift; first_pts=0
+    // anchors the start. It is a no-op on files whose timestamps are already
+    // clean (the common case), so it is safe to apply unconditionally.
+    args << "-r" << "5"
+         << "-af" << "aresample=async=1:first_pts=0"
+         << "-c:a" << "aac" << "-b:a" << "192k";
 
     // Cap output duration explicitly. -shortest is UNRELIABLE with -loop 1 —
     // in testing it produced ~2x the audio length (24s for a 12s clip) because
@@ -722,24 +771,29 @@ void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString 
                        << (forceSoftware ? "(software fallback)" : "");
     emit progress(0, 100, m_progressLabel);
     m_process->start("ffmpeg", args);
-    qDebug() << "[ffmpeg] radio-video started; watchdog 20s";
-    // Arm the watchdog: if the chosen encoder (typically a HW one) produces no
-    // output frame within the window, treat it as deadlocked and fall back.
-    m_watchdog->start(20000);
+    qDebug() << "[ffmpeg] radio-video started; watchdog" << (WATCHDOG_STALL_MS / 1000) << "s";
+    // Arm the sliding-window stall watchdog: it ticks every WATCHDOG_POLL_MS
+    // and kills the encode if out_time_us doesn't advance for WATCHDOG_STALL_MS
+    // at any point (first-frame deadlock or mid-encode hang). m_lastProgressAt
+    // starts now so the first window covers the encoder warm-up.
+    m_lastProgressAt.start();
+    m_watchdog->start(WATCHDOG_POLL_MS);
 }
 
 void FFmpegRunner::burnSubtitles(const QString &videoPath, const QString &assPath,
-                                 const QString &outputPath, int fps, int crf) {
+                                 const QString &outputPath, int fps, int crf,
+                                 double videoDurationHint) {
     // Remember how to replay this exact encode on the software path, in case
-    // the startup watchdog detects a hung hardware encoder and needs to retry.
-    m_retryWithSoftware = [this, videoPath, assPath, outputPath, fps, crf]() {
-        burnSubtitlesImpl(videoPath, assPath, outputPath, fps, crf, true);
+    // the watchdog detects a hung hardware encoder and needs to retry.
+    m_retryWithSoftware = [this, videoPath, assPath, outputPath, fps, crf, videoDurationHint]() {
+        burnSubtitlesImpl(videoPath, assPath, outputPath, fps, crf, true, videoDurationHint);
     };
-    burnSubtitlesImpl(videoPath, assPath, outputPath, fps, crf, false);
+    burnSubtitlesImpl(videoPath, assPath, outputPath, fps, crf, false, videoDurationHint);
 }
 
 void FFmpegRunner::burnSubtitlesImpl(const QString &videoPath, const QString &assPath,
-                                     const QString &outputPath, int fps, int crf, bool forceSoftware) {
+                                     const QString &outputPath, int fps, int crf, bool forceSoftware,
+                                     double videoDurationHint) {
     m_singleShot = true;
     m_finished = false;
     m_progressStdoutBuf.clear();
@@ -749,6 +803,8 @@ void FFmpegRunner::burnSubtitlesImpl(const QString &videoPath, const QString &as
     m_usedHw = false;
     m_gotProgress = false;
     m_retrying = false;
+    m_watchdogKilled = false;
+    m_lastOutTimeSec = -1.0;
     m_successMessage = tr("Subtitles burned successfully.");
     m_progressLabel = tr("Burning subtitles...");
 
@@ -769,8 +825,12 @@ void FFmpegRunner::burnSubtitlesImpl(const QString &videoPath, const QString &as
         return;
     }
 
-    // Progress denominator = the input video's duration (probed).
-    m_progressTotal = probeMediaDuration(videoPath);
+    // Progress denominator = the input video's duration. Prefer the caller's
+    // hint (mpv, which already decoded the file); fall back to probing only
+    // when no hint was supplied.
+    m_progressTotal = (videoDurationHint > 0.0)
+        ? videoDurationHint
+        : probeMediaDuration(videoPath);
 
     // Pick the encoder (hardware if usable, else libx264/mpeg4). -preset
     // veryfast replaces "medium": ~4x faster at the same CRF (same visual
@@ -806,10 +866,10 @@ void FFmpegRunner::burnSubtitlesImpl(const QString &videoPath, const QString &as
                        << (forceSoftware ? "(software fallback)" : "");
     emit progress(0, 100, m_progressLabel);
     m_process->start("ffmpeg", args);
-    qDebug() << "[ffmpeg] burn-subtitles started; watchdog 20s";
-    // Arm the watchdog: if the chosen encoder (typically a HW one) produces no
-    // output frame within the window, treat it as deadlocked and fall back.
-    m_watchdog->start(20000);
+    qDebug() << "[ffmpeg] burn-subtitles started; watchdog" << (WATCHDOG_STALL_MS / 1000) << "s";
+    // Arm the sliding-window stall watchdog (see createRadioVideoImpl).
+    m_lastProgressAt.start();
+    m_watchdog->start(WATCHDOG_POLL_MS);
 }
 
 void FFmpegRunner::parseEncodeProgress() {
@@ -832,13 +892,22 @@ void FFmpegRunner::parseEncodeProgress() {
     if (cur < 0.0) return;
     // Only a STRICTLY POSITIVE out_time_us proves the encoder has produced a
     // frame past time 0. A value of 0 appears in early -progress blocks before
-    // any frame is done, and a deadlocked HW encoder can emit those 0-time
-    // blocks indefinitely - so 0 must NOT disarm the watchdog (that was the
+    // any frame is done, and a deadlocked encoder can emit those 0-time blocks
+    // indefinitely - so 0 must NOT refresh the stall watchdog (that was the
     // v1.9.1 bug: AMF spammed out_time_us=0, the watchdog was disarmed, and the
     // encode hung at 0% forever).
     if (cur > 0.0) {
         m_gotProgress = true;
-        m_watchdog->stop();
+        // Refresh the sliding-window stall watchdog ONLY when out_time_us
+        // strictly advances beyond the last value seen. A stalled-but-alive
+        // encoder can keep emitting -progress blocks with a frozen out_time_us;
+        // without the strict-advance check those would refresh the window and
+        // hide the stall. The recurring watchdog (onWatchdogTimeout) fires if
+        // this doesn't happen for WATCHDOG_STALL_MS.
+        if (cur > m_lastOutTimeSec + 0.001) {
+            m_lastOutTimeSec = cur;
+            m_lastProgressAt.start();
+        }
     }
 
     if (m_progressTotal <= 0.0) return;
