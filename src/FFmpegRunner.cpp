@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QFileInfo>
 #include <QDir>
+#include <QImageReader>
 #include <QRegularExpression>
 #include <QStringList>
 
@@ -102,6 +103,29 @@ static double probeMediaDuration(const QString &path) {
     return m.captured(1).toInt() * 3600.0
          + m.captured(2).toInt() * 60.0
          + m.captured(3).toDouble();
+}
+
+// Pre-scale a still cover image to the target frame size, writing exactly one
+// PNG to dst. The source cover can be enormous (a 6687x2883 scan is 19 MP);
+// with -loop 1 ffmpeg re-decodes AND re-scales it for every one of the 5 fps
+// output frames, single-threaded, which starves the multi-threaded libx264 and
+// makes the encode crawl at ~realtime with near-idle CPU. Doing the decode +
+// scale ONCE here means the main encode loops a 2 MP image (trivial per-frame
+// work) so the encoder runs full-throttle. PNG is lossless, so the cover loses
+// no quality. Returns false on any failure so the caller can fall back to the
+// original (unscaled) image rather than aborting the export.
+static bool preScaleImage(const QString &src, const QString &dst, const QString &scalePadVf) {
+    QProcess p;
+    p.start("ffmpeg", QStringList() << "-y" << "-hide_banner" << "-i" << src
+            << "-vf" << scalePadVf << "-frames:v" << "1" << dst);
+    if (!p.waitForFinished(15000)) {
+        p.kill();
+        p.waitForFinished(2000);
+        return false;
+    }
+    if (p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0) return false;
+    const QFileInfo fi(dst);
+    return fi.exists() && fi.size() > 0;
 }
 
 // Locate the first usable VAAPI render node (e.g. /dev/dri/renderD128). Render
@@ -685,19 +709,55 @@ void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString 
     const double dur = (endSec > startSec) ? (endSec - startSec) : audioDuration;
     m_progressTotal = dur;
 
-    // Video filter per framing choice. Every option ends with even-dimension
-    // safety + yuv420p so software encoders accept the frames; the chosen
-    // encoder's plan appends any extra format/hwupload suffix it needs.
-    QString vf;
+    // Split the scale+pad expression (`scalePad`) from the trailing
+    // `format=yuv420p` so the SAME scale expression can be reused to pre-scale
+    // the cover once (below) instead of re-applying it for every output frame.
+    // For Native there is no fixed target - keep the source dimensions (just
+    // force even for yuv420p), so pre-scaling would be pointless and is skipped.
+    QString scalePad;
     if (framing == QStringLiteral("Native")) {
-        vf = QStringLiteral("scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p");
+        scalePad = QStringLiteral("scale=trunc(iw/2)*2:trunc(ih/2)*2");
     } else if (framing == QStringLiteral("1920x1080")) {
-        vf = QStringLiteral("scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p");
+        scalePad = QStringLiteral("scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1");
     } else if (framing == QStringLiteral("1280x720")) {
-        vf = QStringLiteral("scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p");
+        scalePad = QStringLiteral("scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1");
     } else {
         // "1080x1080" (and any unrecognized value) - square is the radio default.
-        vf = QStringLiteral("scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p");
+        scalePad = QStringLiteral("scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(ow-iw)/2:(oh-ih)/2,setsar=1");
+    }
+    const QString vf = scalePad + QStringLiteral(",format=yuv420p");
+
+    // Decode + scale the cover ONCE into a temp PNG (see preScaleImage()). The
+    // source cover can be huge - a 6687x2883 scan is 19 MP - and with -loop 1
+    // ffmpeg re-decodes AND re-scales it for every one of the 5 fps output
+    // frames, single-threaded, starving the multi-threaded libx264 so the encode
+    // crawls at ~realtime with near-idle CPU. Pre-scaling makes the main encode
+    // loop a 2 MP image (trivial per-frame work) so the encoder runs
+    // full-throttle; PNG is lossless so the cover loses no quality. Native has no
+    // fixed target so it can't benefit - loop the original. The main encode's -vf
+    // still runs `scalePad` (a cheap no-op on the already-sized temp), so the
+    // output is identical to looping the original either way. On any failure we
+    // silently fall back to the original image rather than aborting the export.
+    // Gated on the source being LARGER than the output frame: a small cover
+    // loops cheaply already, so we skip the temp file (and the brief blocking
+    // pre-scale call) for it - only oversized covers pay for the pre-scale.
+    QString imageInput = imagePath;
+    if (framing != QLatin1String("Native") && m_tempDir.isValid()) {
+        int targetW = 0, targetH = 0;
+        if (framing == QLatin1String("1920x1080")) { targetW = 1920; targetH = 1080; }
+        else if (framing == QLatin1String("1280x720")) { targetW = 1280; targetH = 720; }
+        else { targetW = 1080; targetH = 1080; } // "1080x1080" (and any unrecognized)
+        const QSize srcSize = QImageReader(imagePath).size(); // header-only, ~ms
+        const bool oversized = srcSize.isValid()
+            && srcSize.width() * srcSize.height() > targetW * targetH;
+        if (oversized) {
+            const QString tempImg = m_tempDir.path() + QStringLiteral("/cover.png");
+            if (preScaleImage(imagePath, tempImg, scalePad)) {
+                imageInput = tempImg;
+            } else {
+                qDebug() << "[ffmpeg] radio-video: cover pre-scale failed, using original image";
+            }
+        }
     }
 
     // Pick the best encoder (hardware if usable, else libx264/mpeg4) and build
@@ -714,11 +774,13 @@ void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString 
     // Verified command:
     //   ffmpeg -y [<vaapi_device>] -loop 1 -framerate 5 -i <image>
     //          [-ss <s> -to <e>] -i <audio> -vf <vf> <encoder args>
-    //          -g 5 -keyint_min 5 -r 5 -af aresample=async=1:first_pts=0
+    //          -g 50 -keyint_min 50 -r 5 -af aresample=async=1:first_pts=0
     //          -c:a aac -b:a 192k -t <dur> -progress pipe:1 <out>
+    //   (<image> is a temp PNG pre-scaled to the frame size unless framing is
+    //    Native - see the pre-scale step above.)
     QStringList args;
     args << "-y" << "-hide_banner" << "-nostats" << plan.globalArgs
-         << "-loop" << "1" << "-framerate" << "5" << "-i" << imagePath;
+         << "-loop" << "1" << "-framerate" << "5" << "-i" << imageInput;
 
     // Trim = INPUT options on the audio input (verified: -ss 2 -to 5 -> 3.000s).
     // Apply only when the user actually narrowed the range below the whole file.
@@ -731,11 +793,15 @@ void FFmpegRunner::createRadioVideoImpl(const QString &imagePath, const QString 
     args << "-i" << audioPath;
 
     args << "-vf" << plan.filter << plan.args;
-    // Frequent keyframes so the output is seekable: at 5 fps, -g 5 = one
-    // keyframe per second. With libx264's default GOP of 250 frames the
-    // keyframes were 50s apart, so players (PotPlayer etc.) jumped 50s per
-    // seek — unusable. The extra I-frames cost little for a static image.
-    args << "-g" << "5" << "-keyint_min" << "5";
+    // Keyframe interval: at 5 fps, -g 50 = one keyframe every 10s. The libx264
+    // default GOP of 250 frames = 50s between keyframes, so keyframe-only
+    // seekers (PotPlayer etc.) jumped 50s per seek — unusable. The previous
+    // -g 5 (1/sec) fixed that but blew the file up: for a static image the
+    // P-frames between keyframes are near-zero size, so the whole video is
+    // essentially (I-frame count) x (I-frame size), and 1/sec on a 1080p cover
+    // produced ~800MB for a long episode. 10s keeps it seekable and is ~10x
+    // smaller; a static image loses nothing from the longer GOP.
+    args << "-g" << "50" << "-keyint_min" << "50";
     // Low fps (5) for a static image: visually identical to 25fps but far
     // smaller files — important for multi-hour radio episodes.
     // Resync the audio to a clean, monotonically increasing timeline starting
